@@ -66,10 +66,20 @@ CONST
     IF RH < MT-1 THEN INC(RH) ELSE ORS.Mark("register stack overflow") END
   END incR;
 
-  PROCEDURE GetIns(adr : INTEGER): INTEGER;
+  PROCEDURE GetIns(adr: INTEGER): INTEGER;
+    VAR word: INTEGER;
   BEGIN
-    RETURN code[adr]
-  END GetInstruction;
+    (* On va chercher le mot de 32 bits qui contient nos deux instructions *)
+    word := code[adr DIV 2];
+    
+    IF adr MOD 2 = 0 THEN
+      (* Cas pair : on veut les 16 bits de POIDS FAIBLE *)
+      RETURN word MOD 10000H
+    ELSE
+      (* Cas impair : on veut les 16 bits de POIDS FORT *)
+      RETURN word DIV 10000H
+    END
+  END GetIns;
 
   PROCEDURE PutAt(ins, adr: INTEGER);
     VAR current: INTEGER;
