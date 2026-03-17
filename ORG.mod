@@ -59,8 +59,6 @@ CONST
 
   (*instruction assemblers according to formats*)
 
-  (*TODO : add procedures to build instructions *)
-
   PROCEDURE incR;
   BEGIN
     IF RH < MT-1 THEN INC(RH) ELSE ORS.Mark("register stack overflow") END
@@ -117,6 +115,20 @@ CONST
   END Trap;
 
   (*handling of forward reference, fixups of branch addresses and constant tables*)
+
+  PROCEDURE fixcode(mno, pno : INTEGER);
+  BEGIN
+    IF pc - fixorgP >= 2000H THEN ORS.Mark("fixcode displacement") 
+    ELSIF mno < - 0FFH THEN ORS.Mark("fixcode mno") 
+    ELSIF (mno # 0 ) & (pno > 0FFH) THEN ORS.Mark("fixcode pno") 
+    ELSE (*TODO HANDLE fixup of procedure with BL whioch is 32 bits*)
+    END
+  END fixcode;
+
+  PROCEDURE fixvar(mno, vno: INTEGER);
+  BEGIN
+    (* TODO: Implement fixup of variables *)
+  END fixvar;
 
   PROCEDURE negated(cond: INTEGER): INTEGER;
   BEGIN
