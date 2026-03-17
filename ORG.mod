@@ -66,13 +66,13 @@ CONST
     IF RH < MT-1 THEN INC(RH) ELSE ORS.Mark("register stack overflow") END
   END incR;
 
-  PROCEDURE GetInstruction(adr : INTEGER): INTEGER;
+  PROCEDURE GetIns(adr : INTEGER): INTEGER;
   BEGIN
     RETURN code[adr]
   END GetInstruction;
 
   PROCEDURE PutAt(ins, adr: INTEGER);
-  VAR current: INTEGER;
+    VAR current: INTEGER;
   BEGIN
     ins := ins MOD 10000H;
     current := code[pc DIV 2];
@@ -82,11 +82,14 @@ CONST
     ELSE
       (* On veut modifier les 16 bits de POIDS FORT *)
       code[adr DIV 2] := (current MOD 10000H) + (ins * 10000H);
-  END;
-  INC(pc)
+    END;
   END PutAt;
 
-  PROCEDURE
+  PROCEDURE PutIns(ins: INTEGER);
+  BEGIN
+    PutAt(ins, pc);
+    INC(pc)
+  END PutIns;
 
   PROCEDURE CheckRegs*;
   BEGIN
