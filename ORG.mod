@@ -38,6 +38,7 @@ CONST
     PC = 15;  (* Program Counter *)
     MT = 10;  (* On réserve R10 pour la base des variables globales *)
 
+    C8 = 100H;  (* Constante pour les décalages de 8 bits *)
 
 
     TYPE Item* = RECORD
@@ -113,14 +114,17 @@ CONST
   END PutIns;
 
   PROCEDURE PutR(op, rd, rm, rn: INTEGER);
+  BEGIN
     PutIns(op + rd + rn * 8H  + rm * 40H)
   END PutR;
 
   PROCEDURE PutI8(op, rdn, imm8: INTEGER);
+  BEGIN
     PutIns(op + imm8 + rdn * 100H)
   END PutI8;
 
   PROCEDURE PutI3(op, rd, rn, imm3: INTEGER);
+  BEGIN
     PutIns(op + imm3 + rd * 8H + rn * 40H)
   END PutI3;
 
@@ -164,9 +168,11 @@ CONST
     RETURN cond
   END negated;
 
-  PROCEDURE fix(at, with: INTEGER);
-  BEGIN code[at] := code[at] DIV C24 * C24 + (with MOD C24)
-  END fix;
+  PROCEDURE fixI8(at, with: INTEGER);
+  BEGIN 
+    IF (with < 0) OR (with > 255) THEN ORS.Mark("fixI8 out of range") END;
+    PutAt(at, GetIns(at) DIV C8 * C8 + (with MOD C8))
+  END fixI8;
 
   PROCEDURE FixOne*(at: INTEGER);
   BEGIN fix(at, pc-at-1)
@@ -187,11 +193,13 @@ CONST
     END
   END FixLinkWith;
 
+
+  (* TODO create new link system*)
   PROCEDURE merged(L0, L1: INTEGER): INTEGER;
     VAR L2, L3: INTEGER;
   BEGIN 
     IF L0 # 0 THEN L3 := L0;
-      REPEAT L2 := L3; L3 := code[L2] MOD 40000H UNTIL L3 = 0;
+      REPEAT L2 := L3; L3 := GetIns(L2) MOD 40000H UNTIL L3 = 0;
       code[L2] := code[L2] + L1; L1 := L0
     END ;
     RETURN L1
@@ -207,7 +215,10 @@ CONST
   END GetSB;
 
   PROCEDURE NilCheck;
-  BEGIN IF check THEN Trap(EQ, 4) END
+  BEGIN 
+    IF check THEN 
+      Trap(EQ, 4) 
+    END
   END NilCheck;
 
   PROCEDURE load(VAR x: Item);
