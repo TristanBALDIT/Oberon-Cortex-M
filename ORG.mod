@@ -11,13 +11,26 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     Reg = 10; RegI = 11; Cond = 12;  (*internal item modes*)
 
 CONST
-    (* Opcodes Thumb (bits 15-10 ou 15-8) *)
-    MOV_imm = 20H;   (* 00100 : MOV Rd, #imm8 *)
-    ADD_imm = 30H;   (* 00110 : ADD Rd, #imm8 *)
-    SUB_imm = 38H;   (* 00111 : SUB Rd, #imm8 *)
-    LDR_pc  = 48H;   (* 01001 : LDR Rd, [PC, #off] *)
-    STR_reg = 60H;   (* 01100 : STR Rd, [Rn, #off] *)
-    LDR_reg = 68H;   (* 01101 : LDR Rd, [Rn, #off] *)
+    (* Opcodes Thumb *)
+    ADDS_imm8 = 3000H;  (* ADDS Rdn, #imm8 *)
+    ADDS_imm3 = 1C00H;  (* ADDS Rd, Rn, #imm3 *)
+    ADD_reg = 1800H;    (* ADDS Rd, Rn, Rm *) 
+
+    SUB_imm8 = 3800H;   (* SUB Rd, #imm8 *)
+    SUB_imm3 = 1E00H;   (* SUB Rd, Rn, #imm3 *)
+    SUB_reg = 1A00H;    (* SUB Rd, Rn, Rm *)
+
+    CMP_imm8 = 2800H;   (* CMP Rn, #imm8 *)
+    CMP_reg = 4280H;    (* CMP Rn, Rm *)
+
+    MOV_reg = 4600H;    (* MOV Rd, Rm *)
+    MOVS_reg = 0000H;   (* MOVS Rd, Rm *)
+    
+    
+    LDR_pc  = 4800H;   (* LDR Rt, [PC, #off] *)
+    LDR_reg = 6800H;   (* LDR Rd, [Rn, #off] *)
+
+    STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
     
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
@@ -98,6 +111,10 @@ CONST
     PutAt(ins, pc);
     INC(pc)
   END PutIns;
+
+  PROCEDURE PutR(op, rd, rm, rn: INTEGER);
+    PutIns(op + rd*1000H + rm*100H + rn*10H)
+  END PutR;
 
   PROCEDURE CheckRegs*;
   BEGIN
