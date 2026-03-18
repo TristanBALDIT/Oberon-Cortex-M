@@ -23,6 +23,7 @@ CONST
     CMP_imm8 = 2800H;   (* CMP Rn, #imm8 *)
     CMP_reg = 4280H;    (* CMP Rn, Rm *)
 
+    MOVS_imm8 = 2000H;   (* MOVS Rd, #imm8 *)
     MOV_reg = 4600H;    (* MOV Rd, Rm *)
     MOVS_reg = 0000H;   (* MOVS Rd, Rm *)
     
@@ -70,6 +71,9 @@ CONST
     code: ARRAY maxCode OF INTEGER;
     data: ARRAY maxTD OF INTEGER;  (*type descriptors*)
     str: ARRAY maxStrx OF CHAR;
+
+    literals: ARRAY 128 OF INTEGER;  (*table of constants for literal pool*)
+    litCount: INTEGER;
 
   (*instruction assemblers according to formats*)
 
@@ -127,6 +131,47 @@ CONST
   BEGIN
     PutIns(op + imm3 + rd * 8H + rn * 40H)
   END PutI3;
+
+  PROCEDURE RegisterConstant(im: INTEGER): INTEGER;
+    VAR i: INTEGER;
+  BEGIN
+    i := 0;
+    WHILE (i < litCount) AND (literals[i] # im) DO INC(i) END ;
+    IF i = litCount THEN
+      literals[i] := im;
+      INC(litCount)
+    END ;
+    RETURN i
+  END RegisterConstant;
+
+  PROCEDURE PutMOVI(r, im: INTEGER);
+  BEGIN
+    (* Cas standard : constante de 8 bit*)
+    IF (im >= 0) AND (im <= 255) THEN PutI8(MOVS_imm8, r, 0, im);
+    ELSE 
+      RegisterConstant(im, offset);
+      PutI(LDR_pc, r, offset)
+    END
+  END PutMOVI;
+
+  PROCEDURE PutI32(op, rd, rn, im: INTEGER);
+  VAR c: INTEGER
+  BEGIN
+    IF (im >= 0) AND (im <= 255)  THEN PutI8(op, rd, rn, c);
+    ELSE PutMOVI(TR, im: INTEGER);
+      PutR(op, rd, rn, TR)
+    END
+  END PutI32;
+
+  PROCEDURE DumpLiteralPool;
+    VAR i: INTEGER;
+  BEGIN
+    IF pc MOD 2 # 0 THEN PutIns(0BF00H) END;  (*NOP to align to 4 bytes*)
+    FOR i := 0 TO litCount - 1 DO 
+      (* Calculer la distance entre LDR et cette adresse*)
+      (* Mettre a jour l'offset du LDR *)
+      (* Ecrire la valeur dans la stack *)
+  END DumpLiteralPool;
 
   PROCEDURE CheckRegs*;
   BEGIN
