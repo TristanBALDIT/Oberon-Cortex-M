@@ -113,8 +113,16 @@ CONST
   END PutIns;
 
   PROCEDURE PutR(op, rd, rm, rn: INTEGER);
-    PutIns(op + rd*1000H + rm*100H + rn*10H)
+    PutIns(op + rd + rn * 8H  + rm * 40H)
   END PutR;
+
+  PROCEDURE PutI8(op, rdn, imm8: INTEGER);
+    PutIns(op + imm8 + rdn * 100H)
+  END PutI8;
+
+  PROCEDURE PutI3(op, rd, rn, imm3: INTEGER);
+    PutIns(op + imm3 + rd * 8H + rn * 40H)
+  END PutI3;
 
   PROCEDURE CheckRegs*;
   BEGIN
@@ -128,7 +136,10 @@ CONST
   END SetCC;
 
   PROCEDURE Trap(cond, num: INTEGER);
-  BEGIN Put3(BLR, cond, ORS.Pos()*100H + num*10H + MT)
+  VAR i: INTEGER;
+  BEGIN 
+    i := ORS.Pos();
+    (* TODO: Implement call to trap handler*)
   END Trap;
 
   (*handling of forward reference, fixups of branch addresses and constant tables*)
@@ -138,7 +149,7 @@ CONST
     IF pc - fixorgP >= 2000H THEN ORS.Mark("fixcode displacement") 
     ELSIF mno < - 0FFH THEN ORS.Mark("fixcode mno") 
     ELSIF (mno # 0 ) & (pno > 0FFH) THEN ORS.Mark("fixcode pno") 
-    ELSE (*TODO HANDLE fixup of procedure with BL whioch is 32 bits*)
+    ELSE (*TODO HANDLE fixup of procedure with BL which is 32 bits*)
     END
   END fixcode;
 
@@ -149,7 +160,7 @@ CONST
 
   PROCEDURE negated(cond: INTEGER): INTEGER;
   BEGIN
-    IF cond < 8 THEN cond := cond+8 ELSE cond := cond-8 END ;
+    cond := cond + 1 - (cond MOD 2) * 2
     RETURN cond
   END negated;
 
