@@ -32,6 +32,8 @@ CONST
     LDR_reg = 6800H;   (* LDR Rd, [Rn, #off] *)
 
     STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
+
+    NOP = BF00H;  
     
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
@@ -73,6 +75,7 @@ CONST
     str: ARRAY maxStrx OF CHAR;
 
     literals: ARRAY 128 OF INTEGER;  (*table of constants for literal pool*)
+    ldrAddr: ARRAY 128 OF INTEGER;   (*addresses of LDR instructions referring to literal pool*)
     litCount: INTEGER;
 
   (*instruction assemblers according to formats*)
@@ -102,7 +105,7 @@ CONST
   BEGIN
     ins := ins MOD 10000H;
     current := code[pc DIV 2];
-    IF pc MOD 2 = 0 THEN
+    IF adr MOD 2 = 0 THEN
       (* On veut modifier les 16 bits de POIDS FAIBLE *)
       code[adr DIV 2] := (current DIV 10000H * 10000H) + ins;
     ELSE
@@ -132,7 +135,7 @@ CONST
     PutIns(op + imm3 + rd * 8H + rn * 40H)
   END PutI3;
 
-  PROCEDURE RegisterConstant(im: INTEGER): INTEGER;
+  PROCEDURE RegisterConstant(im: INTEGER);
     VAR i: INTEGER;
   BEGIN
     i := 0;
@@ -141,16 +144,16 @@ CONST
       literals[i] := im;
       INC(litCount)
     END ;
-    RETURN i
   END RegisterConstant;
 
   PROCEDURE PutMOVI(r, im: INTEGER);
+  VAR i: INTEGER;
   BEGIN
     (* Cas standard : constante de 8 bit*)
     IF (im >= 0) AND (im <= 255) THEN PutI8(MOVS_imm8, r, 0, im);
     ELSE 
-      RegisterConstant(im, offset);
-      PutI(LDR_pc, r, offset)
+      RegisterConstant(im);
+      PutI(LDR_pc, r, 0) (* On ne connait pas encore l'adresse du literal donc offset = 0*)
     END
   END PutMOVI;
 
@@ -166,11 +169,19 @@ CONST
   PROCEDURE DumpLiteralPool;
     VAR i: INTEGER;
   BEGIN
-    IF pc MOD 2 # 0 THEN PutIns(0BF00H) END;  (*NOP to align to 4 bytes*)
+    IF pc MOD 2 # 0 THEN 
+      PutIns(NOP) (*NOP to align to 4 bytes*)
+      INC(pc)
+    END;  
     FOR i := 0 TO litCount - 1 DO 
-      (* Calculer la distance entre LDR et cette adresse*)
-      (* Mettre a jour l'offset du LDR *)
-      (* Ecrire la valeur dans la stack *)
+      offset := (pc - (ldrAddr[i] + 4)) DIV 4;  
+      IF (offset < 0) OR (offset > 255) THEN
+        ORS.Mark("Literal pool hors de portee (> 1024 octets)")
+      ELSE
+        PutAt(ldrAddr[i], GetIns(ldrAddr[i])+ offset)     
+      END
+      code[pc DIV 2] := literals[i];  (*Ecrire la constante dans le code*)
+      INC(pc)
   END DumpLiteralPool;
 
   PROCEDURE CheckRegs*;
