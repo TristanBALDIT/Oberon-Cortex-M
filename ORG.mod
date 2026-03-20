@@ -254,26 +254,29 @@ CONST
     PutAt(at, GetIns(at) DIV C8 * C8 + (with MOD C8))
   END fixI8;
 
+  PROCEDURE fixB(at, with: INTEGER);
+  BEGIN
+    PutAt(at, GetIns(at) DIV C8 * C8 + (with - 2 MOD C8))
+  END fixB;
+
   PROCEDURE FixOne*(at: INTEGER);
-  BEGIN fix(at, pc-at-1)
+  BEGIN fixB(at, pc-at)
   END FixOne;
 
-  PROCEDURE FixLink*(L: INTEGER);
+  PROCEDURE FixLinkWith(L, dst: INTEGER);
     VAR L1: INTEGER;
   BEGIN
-    WHILE L # 0 DO L1 := code[L] MOD 40000H; fix(L, pc-L-1); L := L1 END
-  END FixLink;
-
-  PROCEDURE FixLinkWith(L0, dst: INTEGER);
-    VAR L1: INTEGER;
-  BEGIN
-    WHILE L0 # 0 DO
-      L1 := code[L0] MOD C24;
-      code[L0] := code[L0] DIV C24 * C24 + ((dst - L0 - 1) MOD C24); L0 := L1
+    WHILE L # 0 DO
+      L1 := GetIns(L) MOD C8
+      fixB(L, dst - L) 
+      L := L1
     END
   END FixLinkWith;
 
-
+  PROCEDURE FixLink*(L: INTEGER);
+  BEGIN FixLinkWith(L, pc)
+  END FixLink;
+  
   (* TODO create new link system*)
   PROCEDURE merged(L0, L1: INTEGER): INTEGER;
     VAR L2, L3: INTEGER;
