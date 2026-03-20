@@ -33,6 +33,8 @@ CONST
 
     STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
 
+    B = D000H;         (* B label *)
+
     NOP = BF00H;  
     
     (* Registres dédiés ARM *)
@@ -42,6 +44,7 @@ CONST
     MT = 10;  (* On réserve R10 pour la base des variables globales *)
 
     C8 = 100H;  (* Constante pour les décalages de 8 bits *)
+    C15 = 8000H; (* Constante pour les décalages de 15 bits *)
 
 
     TYPE Item* = RECORD
@@ -135,6 +138,11 @@ CONST
     PutIns(op + imm3 + rd * 8H + rn * 40H)
   END PutI3;
 
+  PROCEDURE PutB(op, cond, imm8: INTEGER);
+  BEGIN
+    PutIns(op + cond * C8 + imm8)
+  END PutB;
+
   PROCEDURE RegisterConstant(im: INTEGER);
     VAR i: INTEGER;
   BEGIN
@@ -198,7 +206,13 @@ CONST
   VAR i: INTEGER;
   BEGIN 
     i := ORS.Pos();
-    (* TODO: Implement call to trap handler*)
+    PutMOVI(TR, i); (*TODO Solve the issue of TR = 12 > 7 not accessible by LDR*)
+    offset := (7 - num - (pc + 2));
+    IF (offset < -128) OR (offset > 127) THEN
+      ORS.Mark("Trap target out of range")
+    ELSE
+      PutB(B, cond, offset);
+    END; 
   END Trap;
 
   (*handling of forward reference, fixups of branch addresses and constant tables*)
