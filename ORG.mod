@@ -171,7 +171,6 @@ CONST
   BEGIN
     IF pc MOD 2 # 0 THEN 
       PutIns(NOP) (*NOP to align to 4 bytes*)
-      INC(pc)
     END;  
     FOR i := 0 TO litCount - 1 DO 
       offset := (pc - (ldrAddr[i] + 4)) DIV 4;  
@@ -209,13 +208,24 @@ CONST
     IF pc - fixorgP >= 2000H THEN ORS.Mark("fixcode displacement") 
     ELSIF mno < - 0FFH THEN ORS.Mark("fixcode mno") 
     ELSIF (mno # 0 ) & (pno > 0FFH) THEN ORS.Mark("fixcode pno") 
-    ELSE (*TODO HANDLE fixup of procedure with BL which is 32 bits*)
+    ELSE 
+      PutIns( - mno * C8 + pno)
+      PutIns(ORD(mno # 0) * C15 + (pc - fixorgP - 1))  (* TODO: Verify the offset calculation with the linker*)
+      fixorgP := pc - 1;
     END
   END fixcode;
 
   PROCEDURE fixvar(mno, vno: INTEGER);
   BEGIN
-    (* TODO: Implement fixup of variables *)
+    IF (pc _ fixorgD >= 4000H) THEN ORS.Mark("fixvar displacement")
+    ELSIF mno < -0FFH THEN ORS.Mark("fixvar mno")
+    ELSIF (mno # 0) & (vno > 0FFH) THEN ORS.Mark("fixvar vno")
+    ELSIF (vno > 0FFFFH) THEN ORS.Mark("fixvar vno > 64K")
+    ELSE
+      PutIns( - mno * C8 + vno)
+      PutIns(ORD(mno # 0) * C15 + (pc - fixorgD - 1))  (* TODO: Verify the offset calculation with the linker*)
+      fixorgD := pc - 1;
+    END
   END fixvar;
 
   PROCEDURE negated(cond: INTEGER): INTEGER;
