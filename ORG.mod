@@ -30,10 +30,13 @@ CONST
     
     LDR_pc  = 4800H;   (* LDR Rt, [PC, #off] *)
     LDR_reg = 6800H;   (* LDR Rd, [Rn, #off] *)
+    LDR_sp_imm8 = 9100H;  (* LDR Rd, [SP, #imm8] *)
 
     STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
 
     B = D000H;         (* B label *)
+
+    ADR = A000H;       (* ADR Rd, label *)
 
     NOP = BF00H;  
     
@@ -43,6 +46,9 @@ CONST
     PC = 15;  (* Program Counter *)
     MT = 10;  (* On réserve R10 pour la base des variables globales *)
 
+    C3 = 8H;    (* Constante pour les décalages de 3 bits *)
+    C6 = 40H;   (* Constante pour les décalages de 6 bits *)
+    C7 = 80H;   (* Constante pour les décalages de 7 bits *)
     C8 = 100H;  (* Constante pour les décalages de 8 bits *)
     C15 = 8000H; (* Constante pour les décalages de 15 bits *)
 
@@ -138,10 +144,22 @@ CONST
     PutIns(op + imm3 + rd * 8H + rn * 40H)
   END PutI3;
 
+  PROCEDURE PutI5(op, rt, rn, imm5: INTEGER);
+  BEGIN
+    PutIns(op + imm5 * C6 + rn * C3 + rt)
+  END PutI5;
+
   PROCEDURE PutB(op, cond, imm8: INTEGER);
   BEGIN
     PutIns(op + cond * C8 + imm8)
   END PutB;
+
+  PROCEDURE PutMOV(rd, rm: INTEGER);
+    VAR d: INTEGER;
+  BEGIN
+    IF rd > 7 THEN d := 1; rd := rd - 8  ELSE d := 0 END;  
+    PutIns(MOV_reg + D * C7 + rm * C3 + rd)
+  END PutMOV;
 
   PROCEDURE RegisterConstant(im: INTEGER);
     VAR i: INTEGER;
@@ -202,6 +220,12 @@ CONST
   BEGIN x.mode := Cond; x.a := 0; x.b := 0; x.r := n
   END SetCC;
 
+  PROCEDURE negated(cond: INTEGER): INTEGER;
+  BEGIN
+    cond := cond + 1 - (cond MOD 2) * 2
+    RETURN cond
+  END negated;
+
   PROCEDURE Trap(cond, num: INTEGER);
   VAR i: INTEGER;
   BEGIN 
@@ -214,6 +238,10 @@ CONST
       PutB(B, cond, offset);
     END; 
   END Trap;
+
+  PROCEDURE NilCheck(r: INTEGER);
+  BEGIN IF check THEN PutI8(CMP_imm8, r, 0); Trap(EQ, TrapNIL) END
+  END NilCheck;
 
   (*handling of forward reference, fixups of branch addresses and constant tables*)
 
@@ -241,12 +269,6 @@ CONST
       fixorgD := pc - 1;
     END
   END fixvar;
-
-  PROCEDURE negated(cond: INTEGER): INTEGER;
-  BEGIN
-    cond := cond + 1 - (cond MOD 2) * 2
-    RETURN cond
-  END negated;
 
   PROCEDURE fixI8(at, with: INTEGER);
   BEGIN 
@@ -277,63 +299,53 @@ CONST
   BEGIN FixLinkWith(L, pc)
   END FixLink;
   
-  (* TODO create new link system*)
+  (* merge of AND & OR chains *)
   PROCEDURE merged(L0, L1: INTEGER): INTEGER;
     VAR L2, L3: INTEGER;
   BEGIN 
     IF L0 # 0 THEN L3 := L0;
-      REPEAT L2 := L3; L3 := GetIns(L2) MOD 40000H UNTIL L3 = 0;
-      code[L2] := code[L2] + L1; L1 := L0
+      REPEAT L2 := L3; L3 := GetIns(L2) MOD C8 UNTIL L3 = 0;
+      PutAt(L2, GetIns(L2) + L1); L1 := L0
     END ;
     RETURN L1
   END merged;
 
   (* loading of operands and addresses into registers *)
 
-  PROCEDURE GetSB(base: INTEGER);
-  BEGIN
-    IF version = 0 THEN Put1(Mov, RH, 0, VarOrg0)
-    ELSE Put2(Ldr, RH, -base, pc-fixorgD); fixorgD := pc-1
-    END
-  END GetSB;
-
-  PROCEDURE NilCheck;
-  BEGIN 
-    IF check THEN 
-      Trap(EQ, 4) 
-    END
-  END NilCheck;
-
   PROCEDURE load(VAR x: Item);
-    VAR op: INTEGER;
+    VAR op, c: INTEGER;
   BEGIN
-    IF x.type.size = 1 THEN op := Ldr+1 ELSE op := Ldr END ;
+    IF (x.type = ORB.realType) THEN
+      IF (x.mode = Reg) THEN (*TODO Solve the real type handling issue*) END;
+    END;
     IF x.mode # Reg THEN
+      IF x.type.size = 1 THEN op := LDRB ELSE op := LDR_reg END;
       IF x.mode = ORB.Const THEN
         IF x.type.form = ORB.Proc THEN
-          IF x.r > 0 THEN ORS.Mark("not allowed")
-          ELSIF x.r = 0 THEN Put3(BL, 7, 0); Put1a(Sub, RH, LNK, pc*4 - x.a)
-          ELSE GetSB(x.r); Put1(Add, RH, RH, x.a + 100H) (*mark as progbase-relative*)
+          IF x.r > 0 THEN (*local*) ORS.Mark("not allowed")
+          ELSIF x.r = 0 THEN (*global*) 
+            c := pc - x.a DIV 2 + 2;
+            IF c >= C8 THEN
+              (*Utiliser literal pool*)
+            ELSE
+              (*Mov PC into RH then SUB imm8*)
+              PutMOV(RH, PC);
+              PutI8(SUB_imm8, RH, RH, c);
+            END;
+          ELSE (*imported*) fixvar(x.r + 80H, x.a); PutI(MOVT, RH, 0, 0); PutI8 (*TODO : replace MOVT usage *)
           END
-        ELSIF (x.a <= 0FFFFH) & (x.a >= -10000H) THEN Put1(Mov, RH, 0, x.a)
-        ELSE Put1(Mov+U, RH, 0, x.a DIV 10000H MOD 10000H);
-          IF x.a MOD 10000H # 0 THEN Put1(Ior, RH, RH, x.a MOD 10000H) END
-        END ;
+        ELSE PutMOVI(RH, x.a)
+        END;
         x.r := RH; incR
       ELSIF x.mode = ORB.Var THEN
-        IF x.r > 0 THEN (*local*) Put2(op, RH, SP, x.a + frame)
-        ELSE GetSB(x.r); Put2(op, RH, RH, x.a)
+        IF x.r > 0 THEN (*local*) PutI8(LDR_sp_imm8, RH, x.a + frame)
+        ELSE fixvar(x.r, x.a); PutI(MOVT, RH, 0, 0); PutI5(LDR_reg, RH, RH, 0) (*TODO : replace MOVT usage *)
         END ;
         x.r := RH; incR
-      ELSIF x.mode = ORB.Par THEN Put2(Ldr, RH, SP, x.a + frame); Put2(op, RH, RH, x.b); x.r := RH; incR
-      ELSIF x.mode = RegI THEN Put2(op, x.r, x.r, x.a)
-      ELSIF x.mode = Cond THEN
-        Put3(BC, negated(x.r), 2);
-        FixLink(x.b); Put1(Mov, RH, 0, 1); Put3(BC, 7, 1);
-        FixLink(x.a); Put1(Mov, RH, 0, 0); x.r := RH; incR
-      END ;
-      x.mode := Reg
-    END
+      ELSIF x.mode = ORB.Par THEN 
+        PutI8(LDR_sp_imm8, RH, x.a + frame); 
+        PutI5(LDR_reg, RH, RH, x.b);
+        x.r := RH; incR
   END load;
 
   PROCEDURE loadAdr(VAR x: Item);
