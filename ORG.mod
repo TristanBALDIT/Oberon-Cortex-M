@@ -47,6 +47,10 @@ CONST
 
     32_B_cond_imm21 = F0008000H; (* B label *)
 
+    32_MOV_exp12 = F04F0000H;   (* MOV Rd, #const *)
+    32_MOVS_exp12 = F04F0000H;   (* MOVS Rd, #const *)
+
+    32_MOVW = F2400000H;   (* MOVW Rd, #imm16 *)
 
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
