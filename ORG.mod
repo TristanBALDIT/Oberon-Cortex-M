@@ -346,6 +346,11 @@ CONST
         PutI8(LDR_sp_imm8, RH, x.a + frame); 
         PutI5(LDR_reg, RH, RH, x.b);
         x.r := RH; incR
+      ELSIF x.mode = RegI THEN PutI5(LDR_reg, x.r, x.r, x.a)
+      ELSIF x.mode = Cond THEN 
+        PutB(B, negated(x.r), 3 - dPC); 
+        FixLink(x.b); PutI
+      END ;
   END load;
 
   PROCEDURE loadAdr(VAR x: Item);
