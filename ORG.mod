@@ -11,35 +11,43 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     Reg = 10; RegI = 11; Cond = 12;  (*internal item modes*)
 
 CONST
-    (* Opcodes Thumb *)
-    ADDS_imm8 = 3000H;  (* ADDS Rdn, #imm8 *)
-    ADDS_imm3 = 1C00H;  (* ADDS Rd, Rn, #imm3 *)
-    ADD_reg = 1800H;    (* ADDS Rd, Rn, Rm *) 
+    (* Opcodes Thumb - 16-bits *)
+    16_ADDS_imm8 = 3000H;  (* ADDS Rdn, #imm8 *)
+    16_ADDS_imm3 = 1C00H;  (* ADDS Rd, Rn, #imm3 *)
+    16_ADD_reg = 1800H;    (* ADDS Rd, Rn, Rm *) 
 
-    SUB_imm8 = 3800H;   (* SUB Rd, #imm8 *)
-    SUB_imm3 = 1E00H;   (* SUB Rd, Rn, #imm3 *)
-    SUB_reg = 1A00H;    (* SUB Rd, Rn, Rm *)
+    16_SUB_imm8 = 3800H;   (* SUB Rd, #imm8 *)
+    16_SUB_imm3 = 1E00H;   (* SUB Rd, Rn, #imm3 *)
+    16_SUB_reg = 1A00H;    (* SUB Rd, Rn, Rm *)
 
-    CMP_imm8 = 2800H;   (* CMP Rn, #imm8 *)
-    CMP_reg = 4280H;    (* CMP Rn, Rm *)
+    16_CMP_imm8 = 2800H;   (* CMP Rn, #imm8 *)
+    16_CMP_reg = 4280H;    (* CMP Rn, Rm *)
 
-    MOVS_imm8 = 2000H;   (* MOVS Rd, #imm8 *)
-    MOV_reg = 4600H;    (* MOV Rd, Rm *)
-    MOVS_reg = 0000H;   (* MOVS Rd, Rm *)
+    16_MOVS_imm8 = 2000H;   (* MOVS Rd, #imm8 *)
+    16_MOV_reg = 4600H;    (* MOV Rd, Rm *)
+    16_MOVS_reg = 0000H;   (* MOVS Rd, Rm *)
     
     
-    LDR_pc  = 4800H;   (* LDR Rt, [PC, #off] *)
-    LDR_reg = 6800H;   (* LDR Rd, [Rn, #off] *)
-    LDR_sp_imm8 = 9100H;  (* LDR Rd, [SP, #imm8] *)
+    16_LDR_pc  = 4800H;   (* LDR Rt, [PC, #off] *)
+    16_LDR_reg = 6800H;   (* LDR Rd, [Rn, #off] *)
+    16_LDR_sp_imm8 = 9100H;  (* LDR Rd, [SP, #imm8] *)
 
-    STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
+    16_STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
 
-    B = D000H;         (* B label *)
+    16_B = D000H;         (* B label *)
 
-    ADR = A000H;       (* ADR Rd, label *)
+    16_ADR = A000H;       (* ADR Rd, label *)
 
-    NOP = BF00H;  
+    16_NOP = BF00H;  
+
+    (* Opcodes - 32-bits *)
     
+    32_ADDS_imm12 = F1100000H;  (* ADDS Rd, Rn, #imm12 *)
+    32_ADD_imm12 = F1000000H;   (* ADD Rd, Rn, #imm12 *)
+
+    32_B_cond_imm21 = F0008000H; (* B label *)
+
+
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
     LR = 14;  (* Link Register *)
@@ -161,25 +169,24 @@ CONST
     PutIns(MOV_reg + D * C7 + rm * C3 + rd)
   END PutMOV;
 
-  PROCEDURE RegisterConstant(im: INTEGER);
-    VAR i: INTEGER;
+  PROCEDURE DecomposeConst(const : INTEGER; VAR imm: INTEGER): BOOLEAN;
+    VAR rot: INTEGER; ret: BOOLEAN;
   BEGIN
-    i := 0;
-    WHILE (i < litCount) AND (literals[i] # im) DO INC(i) END ;
-    IF i = litCount THEN
-      literals[i] := im;
-      INC(litCount)
-    END ;
-  END RegisterConstant;
+    imm := const; rot := 0;
+    WHILE (rot<31) & ((imm < 0) OR (imm > 255)) DO
+      imm := ROR(imm, 31); INC(rot)
+    END;
+    ret := (imm >= 0) AND (imm <= 255);
+    imm := imm + rot * C8;
+  END DecomposeConst;
 
   PROCEDURE PutMOVI(r, im: INTEGER);
-  VAR i: INTEGER;
+    VAR i: INTEGER;
   BEGIN
-    (* Cas standard : constante de 8 bit*)
-    IF (im >= 0) AND (im <= 255) THEN PutI8(MOVS_imm8, r, 0, im);
-    ELSE 
-      RegisterConstant(im);
-      PutI(LDR_pc, r, 0) (* On ne connait pas encore l'adresse du literal donc offset = 0*)
+    IF DecomposeConst(im, i) THEN (* TODO : put 32 bits rot MOV*)
+    ELSIF DecomposeConst( -1-im , i) THEN (* TODO : put 32 bits rot MVN*)
+    ELSE
+      (* TODO : use MOVW and MOVT*)
     END
   END PutMOVI;
 
@@ -191,23 +198,6 @@ CONST
       PutR(op, rd, rn, TR)
     END
   END PutI32;
-
-  PROCEDURE DumpLiteralPool;
-    VAR i: INTEGER;
-  BEGIN
-    IF pc MOD 2 # 0 THEN 
-      PutIns(NOP) (*NOP to align to 4 bytes*)
-    END;  
-    FOR i := 0 TO litCount - 1 DO 
-      offset := (pc - (ldrAddr[i] + 4)) DIV 4;  
-      IF (offset < 0) OR (offset > 255) THEN
-        ORS.Mark("Literal pool hors de portee (> 1024 octets)")
-      ELSE
-        PutAt(ldrAddr[i], GetIns(ldrAddr[i])+ offset)     
-      END
-      code[pc DIV 2] := literals[i];  (*Ecrire la constante dans le code*)
-      INC(pc)
-  END DumpLiteralPool;
 
   PROCEDURE CheckRegs*;
   BEGIN
