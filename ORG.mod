@@ -34,7 +34,7 @@ CONST
 
     16_STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
 
-    16_B = D000H;         (* B label *)
+    16_B_cond_imm8 = D000H;         (* B label *)
 
     16_ADR = A000H;       (* ADR Rd, label *)
 
@@ -68,6 +68,7 @@ CONST
     C11 = 800H;  (* Constante pour les décalages de 11 bits *)
     C12 = 1000H; (* Constante pour les décalages de 12 bits *)
     C15 = 8000H; (* Constante pour les décalages de 15 bits *)
+    C19 = 80000H; (* Constante pour les décalages de 19 bits *)
 
 
     TYPE Item* = RECORD
@@ -158,18 +159,33 @@ CONST
 
   PROCEDURE PutI3(op, rd, rn, imm3: INTEGER);
   BEGIN
-    PutIns(op + imm3 + rd * 8H + rn * 40H)
+    PutIns(op + (imm3 MOD C3) * C6 + rn * C3 + rd)
   END PutI3;
 
   PROCEDURE PutI5(op, rt, rn, imm5: INTEGER);
   BEGIN
-    PutIns(op + imm5 * C6 + rn * C3 + rt)
+    PutIns(op + (imm5 MOD C5) * C6 + rn * C3 + rt)
   END PutI5;
 
-  PROCEDURE PutB(op, cond, imm8: INTEGER);
+  PROCEDURE PutB16(op, cond, imm8: INTEGER);
   BEGIN
-    PutIns(op + cond * C8 + imm8)
-  END PutB;
+    PutIns(op + cond * C8 + imm8 MOD C8)
+  END PutB16;
+
+  PROCEDURE PutB32(op, cond, imm: INTEGER);
+  BEGIN
+    PutIns(op DIV C16 + (imm DIV C19) * C10 + cond * C6 + (imm DIV C11) MOD C6)
+    PutIns(op MOD C16 + ((imm DIV C17) MOD 4) * C13  + ((imm DIV C18) MOD 2) * C11 + imm MOD C11)
+  END PutB32;
+
+  PROCEDURE DecodeB32(ins1, ins2: INTEGER);
+    VAR s, j1, j2, imm: INTEGER;
+  BEGIN
+    s := ins1 DIV C10 MOD 2;
+    j1 := ins2 DIV C13 MOD 2;
+    j2 := ins2 DIV C11 MOD 2;
+    return  s * C20 + j2 * C19 + j1 * C17 + (ins1 MOD C6) * C11 + (ins2 MOD C11);
+  END DecodeB32;
 
   PROCEDURE PutMOV(rd, rm: INTEGER);
     VAR d: INTEGER;
@@ -178,16 +194,16 @@ CONST
     PutIns(16_MOV_reg + D * C7 + rm * C3 + rd)
   END PutMOV;
 
-  PROCEDURE PutMOVI12(op, rd, imm12: INTEGER);
+  PROCEDURE PutMOVI12(op, rd, rn, imm12: INTEGER);
   BEGIN
-    PutIns(op + imm12 DIV C12 * C10)
-    PutIns((imm12 DIV C8) MOD 8 * C12 + rd * C8 + imm12 MOD C8)
+    PutIns(op DIV C16 + imm12 DIV C12 * C10 + rn)
+    PutIns(op MOD C16 + (imm12 DIV C8) MOD 8 * C12 + rd * C8 + imm12 MOD C8)
   END PutMOVI12;
 
   PROCEDURE PutI16(op, rd, imm16: INTEGER);
   BEGIN
-    PutIns(op + ((imm16 DIV C11) MOD 2) * C10 + imm16 DIV C12)
-    PutIns((imm16 DIV C8) MOD 8 * C12 + rd * C8 + imm16 MOD C8)
+    PutIns(op DIV C16 + ((imm16 DIV C11) MOD 2) * C10 + imm16 DIV C12)
+    PutIns(op MOD C16 + (imm16 DIV C8) MOD 8 * C12 + rd * C8 + imm16 MOD C8)
   END PutI16;
 
   PROCEDURE DecomposeConst(const : INTEGER; VAR imm: INTEGER): BOOLEAN;
@@ -204,8 +220,8 @@ CONST
   PROCEDURE PutMOVI(r, im: INTEGER);
     VAR i: INTEGER;
   BEGIN
-    IF DecomposeConst(im, i) THEN PutI12(32_MOV_exp12, r, i)
-    ELSIF DecomposeConst( -1-im , i) THEN PutI12(32_MVN_exp12, r, i)
+    IF DecomposeConst(im, i) THEN PutI12(32_MOV_exp12, r, 0, i)
+    ELSIF DecomposeConst( -1-im , i) THEN PutI12(32_MVN_exp12, r, 0, i)
     ELSE
       PutI16(32_MOVW, r, im MOD C16);
       if im DIV C16 # 0 THEN
@@ -216,7 +232,7 @@ CONST
   PROCEDURE PutI32(op, rd, rn, im: INTEGER);
   VAR c: INTEGER
   BEGIN
-    IF (im >= 0) AND (im <= 255)  THEN PutI8(op, rd, rn, c);
+    IF DecomposeConst(im, c) THEN PutI12(op, rd, rn, c)
     ELSE PutMOVI(TR, im: INTEGER);
       PutR(op, rd, rn, TR)
     END
@@ -243,12 +259,12 @@ CONST
   VAR i: INTEGER;
   BEGIN 
     i := ORS.Pos();
-    PutMOVI(TR, i); (*TODO Solve the issue of TR = 12 > 7 not accessible by LDR*)
+    PutMOVI(TR, i);
     offset := (7 - num - (pc + 2));
     IF (offset < -128) OR (offset > 127) THEN
-      ORS.Mark("Trap target out of range")
+      PutB32(32_B_cond_imm21, cond, offset);
     ELSE
-      PutB(B, cond, offset);
+      PutB16(16_B_cond_imm8, cond, offset);
     END; 
   END Trap;
 
@@ -290,8 +306,13 @@ CONST
   END fixI8;
 
   PROCEDURE fixB(at, with: INTEGER);
+    VAR imm, ins: INTEGER;
   BEGIN
-    PutAt(at, GetIns(at) DIV C8 * C8 + (with - 2 MOD C8))
+    imm = with - 2;  (*PC is already advanced by 2 when the branch is executed*)
+    ins := GetIns(at);
+    PutAt(ins + ((imm DIV 20) MOD 2 - (ins DIV 10) MOD 2) * C10 + imm MOD C6 - ins MOD C6  , at)
+    ins := GetIns(at+1);
+    PutAt(ins + ((imm DIV 18) MOD 2 - (ins DIV 13) MOD 2) * C13 + ((imm DIV 19) MOD 2 - (ins DIV 11) MOD 2) * C11 + imm MOD C11 - ins MOD C11  , at+1)
   END fixB;
 
   PROCEDURE FixOne*(at: INTEGER);
@@ -314,11 +335,21 @@ CONST
   
   (* merge of AND & OR chains *)
   PROCEDURE merged(L0, L1: INTEGER): INTEGER;
-    VAR L2, L3: INTEGER;
+    VAR L2, L3, L4: INTEGER;
   BEGIN 
     IF L0 # 0 THEN L3 := L0;
-      REPEAT L2 := L3; L3 := GetIns(L2) MOD C8 UNTIL L3 = 0;
-      PutAt(L2, GetIns(L2) + L1); L1 := L0
+      REPEAT 
+        L2 := L3; 
+        L3 := GetIns(L2)
+        L4 := GetIns(L2 + 1)
+        L3 := DecodeB32(L3, L4);
+      UNTIL L3 = 0;
+      (*  replace the immediate value in the 32 bits Branch *)
+      ins := GetIns(L2);
+      PutAt(ins + ((L3 DIV 20) MOD 2 - (ins DIV 10) MOD 2) * C10 + L3 MOD C6 - ins MOD C6, L2)
+      ins := GetIns(L2 + 1);
+      PutAt(ins + ((L3 DIV 18) MOD 2 - (ins DIV 13) MOD 2) * C13 + ((L3 DIV 19) MOD 2 - (ins DIV 11) MOD 2) * C11 + L3 MOD C11 - ins MOD C11  , L2+1)
+      L1 := L0
     END ;
     RETURN L1
   END merged;
@@ -352,7 +383,7 @@ CONST
         x.r := RH; incR
       ELSIF x.mode = ORB.Var THEN
         IF x.r > 0 THEN (*local*) PutI8(LDR_sp_imm8, RH, x.a + frame)
-        ELSE fixvar(x.r, x.a); PutI(MOVT, RH, 0, 0); PutI5(LDR_reg, RH, RH, 0) (*TODO : replace MOVT usage *)
+        ELSE fixvar(x.r, x.a); PutI32(MOVT, RH, 0, 0); PutI5(LDR_reg, RH, RH, 0) (*TODO : replace MOVT usage *)
         END ;
         x.r := RH; incR
       ELSIF x.mode = ORB.Par THEN 
