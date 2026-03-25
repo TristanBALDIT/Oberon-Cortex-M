@@ -49,6 +49,7 @@ CONST
 
     32_MOV_exp12 = F04F0000H;   (* MOV Rd, #const *)
     32_MOVS_exp12 = F04F0000H;   (* MOVS Rd, #const *)
+    32_MVN_exp12 = F06F0000H;   (* MVN Rd, #const *)
 
     32_MOVW = F2400000H;   (* MOVW Rd, #imm16 *)
 
@@ -62,6 +63,8 @@ CONST
     C6 = 40H;   (* Constante pour les décalages de 6 bits *)
     C7 = 80H;   (* Constante pour les décalages de 7 bits *)
     C8 = 100H;  (* Constante pour les décalages de 8 bits *)
+    C10 = 400H;  (* Constante pour les décalages de 10 bits *)
+    C12 = 1000H; (* Constante pour les décalages de 12 bits *)
     C15 = 8000H; (* Constante pour les décalages de 15 bits *)
 
 
@@ -170,8 +173,14 @@ CONST
     VAR d: INTEGER;
   BEGIN
     IF rd > 7 THEN d := 1; rd := rd - 8  ELSE d := 0 END;  
-    PutIns(MOV_reg + D * C7 + rm * C3 + rd)
+    PutIns(16_MOV_reg + D * C7 + rm * C3 + rd)
   END PutMOV;
+
+  PROCEDURE PutMOVI12(op, rd, imm: INTEGER);
+  BEGIN
+    PutIns(op + imm DIV C12 * C10)
+    PutIns((imm DIV C8) MOD 8 * C12 + rd * C8 + imm MOD C8)
+  END PutMOVI12;
 
   PROCEDURE DecomposeConst(const : INTEGER; VAR imm: INTEGER): BOOLEAN;
     VAR rot: INTEGER; ret: BOOLEAN;
@@ -181,14 +190,14 @@ CONST
       imm := ROR(imm, 31); INC(rot)
     END;
     ret := (imm >= 0) AND (imm <= 255);
-    imm := imm + rot * C8;
+    imm := (imm - 128) + rot * C7;
   END DecomposeConst;
 
   PROCEDURE PutMOVI(r, im: INTEGER);
     VAR i: INTEGER;
   BEGIN
-    IF DecomposeConst(im, i) THEN (* TODO : put 32 bits rot MOV*)
-    ELSIF DecomposeConst( -1-im , i) THEN (* TODO : put 32 bits rot MVN*)
+    IF DecomposeConst(im, i) THEN PutI12(32_MOV_exp12, r, i)
+    ELSIF DecomposeConst( -1-im , i) THEN PutI12(32_MVN_exp12, r, i)
     ELSE
       (* TODO : use MOVW and MOVT*)
     END
