@@ -54,6 +54,9 @@ CONST
     32_MOVW = F2400000H;   (* MOVW Rd, #imm16 *)
     32_MOVT = F2C00000H;   (* MOVT Rd, #imm16 *)
 
+    32_VMOVA = EE100A10H;  (* VMOV Rt, Sn *)
+    32_VMOVV = EE000A10H;  (* VMOV Sn, Rt *)
+
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
     LR = 14;  (* Link Register *)
@@ -147,10 +150,20 @@ CONST
     INC(pc)
   END PutIns;
 
-  PROCEDURE PutR(op, rd, rm, rn: INTEGER);
+  PROCEDURE PutR(op, rd, rn, rm: INTEGER);
   BEGIN
     PutIns(op + rd + rn * 8H  + rm * 40H)
   END PutR;
+
+  PROCEDURE PutR32_1(op, rd, rn, rm: INTEGER);
+  BEGIN
+    PutIns(op + rd * C16 + rn * C12  + rm)
+  END PutR32_1;
+
+  PROCEDURE PutR32_2(op, rd, rn, rm: INTEGER);
+  BEGIN
+    PutIns(op + rd * C16 + rn * C8  + rm)
+  END PutR32_2;
 
   PROCEDURE PutI8(op, rdn, imm8: INTEGER);
   BEGIN
@@ -194,11 +207,11 @@ CONST
     PutIns(16_MOV_reg + D * C7 + rm * C3 + rd)
   END PutMOV;
 
-  PROCEDURE PutMOVI12(op, rd, rn, imm12: INTEGER);
+  PROCEDURE PutI12(op, rd, rn, imm12: INTEGER);
   BEGIN
     PutIns(op DIV C16 + imm12 DIV C12 * C10 + rn)
     PutIns(op MOD C16 + (imm12 DIV C8) MOD 8 * C12 + rd * C8 + imm12 MOD C8)
-  END PutMOVI12;
+  END PutI12;
 
   PROCEDURE PutI16(op, rd, imm16: INTEGER);
   BEGIN
@@ -299,11 +312,11 @@ CONST
     END
   END fixvar;
 
-  PROCEDURE fixI8(at, with: INTEGER);
+  PROCEDURE fixI(at, with: INTEGER);
   BEGIN 
-    IF (with < 0) OR (with > 255) THEN ORS.Mark("fixI8 out of range") END;
-    PutAt(at, GetIns(at) DIV C8 * C8 + (with MOD C8))
-  END fixI8;
+    IF (with < 0) OR (with > 255) THEN ORS.Mark("fixI out of range") END;
+    PutAt(at, GetIns(at) DIV C8 * C8 + (with MOD C8))     (* fix imm for a 16 bits instruction *)
+  END fixI;
 
   PROCEDURE fixB(at, with: INTEGER);
     VAR imm, ins: INTEGER;
@@ -321,10 +334,10 @@ CONST
 
   PROCEDURE FixLinkWith(L, dst: INTEGER);
     VAR L1: INTEGER;
-  BEGIN
+  BEGIN (* fix chain of branch instructions *)
     WHILE L # 0 DO
-      L1 := GetIns(L) MOD C8
-      fixB(L, dst - L) 
+      L1 := decodeB32(GetIns(L), GetIns(L+1));  (* decode the next addr in the chain *)
+      fixB(L, dst - L)                          (* fix the actual branch *)
       L := L1
     END
   END FixLinkWith;
@@ -356,11 +369,30 @@ CONST
 
   (* loading of operands and addresses into registers *)
 
+  PROCEDURE GetMSB(x: INTEGER): INTEGER;
+    VAR bit: INTEGER;
+  BEGIN
+    x := x MOD C8;
+    IF x = 0 THEN RETURN -1 END;
+    IF x >= C4 THEN
+      IF x >= C6 THEN 
+        IF x >= C7 THEN RETURN 7 ELSE RETURN 6 END
+      ELSE
+        IF x >= C5 THEN RETURN 5 ELSE RETURN 4 END
+    ELSE 
+      IF x >= C2 THEN 
+        IF x >= C3 THEN RETURN 3 ELSE RETURN 2 END
+      ELSE
+        IF x >= C1 THEN RETURN 1 ELSE RETURN 0 END
+      END
+    END
+  END GetMSB;
+
   PROCEDURE load(VAR x: Item);
-    VAR op, c: INTEGER;
+    VAR op, c, c_low, c_high, i, j: INTEGER;
   BEGIN
     IF (x.type = ORB.realType) THEN
-      IF (x.mode = Reg) THEN (*TODO Solve the real type handling issue*) END;
+      IF (x.mode = Reg) THEN PutR32_1(VMOVA, x.r, x.r, 0) END;
     END;
     IF x.mode # Reg THEN
       IF x.type.size = 1 THEN op := LDRB ELSE op := LDR_reg END;
@@ -370,13 +402,22 @@ CONST
           ELSIF x.r = 0 THEN (*global*) 
             c := pc - x.a DIV 2 + 2;
             IF c >= C8 THEN
-              (*Utiliser literal pool*)
+              c_low := c MOD C8;
+              i = GetMSB(c_low);
+              IF i >= 0 THEN
+                j = LSL(c_low, 7-i) MOD C7 + (7 - i -1 ) * C7
+                PutI12(32_SUB_imm12, RH, PC, j);
+              END
+              c_high := c DIV C8;
+              i = GetMSB(c_high);
+              j = LSL(c_low, 7-i) MOD C7 + (24 + 7 - i - 1 )* C7
+              PutI12(32_SUB_imm12, RH, RH, j);
             ELSE
               (*Mov PC into RH then SUB imm8*)
               PutMOV(RH, PC);
               PutI8(SUB_imm8, RH, RH, c);
             END;
-          ELSE (*imported*) fixvar(x.r + 80H, x.a); PutI(MOVT, RH, 0, 0); PutI8 (*TODO : replace MOVT usage *)
+          ELSE (*imported*) fixvar(x.r + 80H, x.a); PutI12(MOVT, RH, 0, 0); PutI8 (*TODO : replace MOVT usage *)
           END
         ELSE PutMOVI(RH, x.a)
         END;
