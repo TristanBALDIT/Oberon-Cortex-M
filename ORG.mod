@@ -449,7 +449,7 @@ CONST
         x.r := RH; incR
       ELSIF x.mode = ORB.Var THEN
         IF x.r > 0 THEN (*local*) PutLS(op, RH, x.a + frame)
-        ELSE fixvar(x.r, x.a); PutI32(MOVT, RH, 0, 0); PutLS(op, RH, RH, 0)
+        ELSE fixvar(x.r, x.a); PutI32(32_MOVT, RH, 0, 0); PutLS(op, RH, RH, 0)
         END ;
         x.r := RH; incR
       ELSIF x.mode = ORB.Par THEN 
@@ -480,6 +480,30 @@ CONST
     END ;
     x.mode := Reg
   END loadAdr;
+
+
+  PROCEDURE loadf(VAR x: Item);
+    CONST op = VLDRS 
+  BEGIN
+    IF (x.type # ORB.realType) THEN ORS.Mark("loadf 0") END;
+    IF x.mode # Reg THEN
+      IF x.mode = ORB.Const THEN
+        IF x.type.form = ORB.Proc THEN ORS.Mark("loadf 1")
+        ELSE PutMOVI(RH, x.a); PutR32_1(VMOVV, RH, RH, 0);
+        END
+        x.r := RH; incR
+      ELSIF x.mode = ORB.Var THEN
+        IF x.r > 0 THEN (*local*) PutVLS(op, RH, SP, x.a + frame)
+        ELSE fixvar(x.r, x.a); PutI32(32_MOVT, RH, 0, 0); PutVLS(op, RH, RH, 0);
+        END ;
+        x.r := RH; incR
+      ELSIF x.mode = ORB.Par THEN PutLS(32_LDR_imm8, RH, SP, x.a + frame); PutVLS(op, RH, RH, x.b); x.r := RH; incR
+      ELSIF x.mode = RegI THEN PutVLS(op, x.r, x.r, x.a)
+      ELSIF x.mode = Cond THEN ORS.Mark("loadf 2")
+      END ;
+    x.mode := Reg
+    END;
+  END loadf;
 
   PROCEDURE loadCond(VAR x: Item);
   BEGIN
