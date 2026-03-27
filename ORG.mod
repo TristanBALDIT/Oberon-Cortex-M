@@ -23,7 +23,7 @@ CONST
     16_CMP_imm8 = 2800H;   (* CMP Rn, #imm8 *)
     16_CMP_reg = 4280H;    (* CMP Rn, Rm *)
 
-    16_MOVS_imm8 = 2000H;   (* MOVS Rd, #imm8 *)
+    16_MOV_imm8 = 2000H;   (* MOV Rd, #imm8 *)
     16_MOV_reg = 4600H;    (* MOV Rd, Rm *)
     16_MOVS_reg = 0000H;   (* MOVS Rd, Rm *)
     
@@ -42,8 +42,8 @@ CONST
 
     (* Opcodes - 32-bits *)
     
-    32_ADDS_imm12 = F1100000H;  (* ADDS Rd, Rn, #imm12 *)
-    32_ADD_imm12 = F1000000H;   (* ADD Rd, Rn, #imm12 *)
+    32_ADDS_exp12 = F1100000H;  (* ADDS Rd, Rn, #imm12 *)
+    32_ADD_exp12 = F1000000H;   (* ADD Rd, Rn, #imm12 *)
 
     32_B_cond_imm21 = F0008000H; (* B label *)
 
@@ -56,6 +56,8 @@ CONST
 
     32_VMOVA = EE100A10H;  (* VMOV Rt, Sn *)
     32_VMOVV = EE000A10H;  (* VMOV Sn, Rt *)
+
+    32_LDR_pc_imm12 = F85F0000H;  (* LDR Rt, [PC, #imm12] *)
 
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
@@ -72,6 +74,10 @@ CONST
     C12 = 1000H; (* Constante pour les décalages de 12 bits *)
     C15 = 8000H; (* Constante pour les décalages de 15 bits *)
     C19 = 80000H; (* Constante pour les décalages de 19 bits *)
+
+    AL = 14;  (* Always *)
+
+  
 
 
     TYPE Item* = RECORD
@@ -251,6 +257,25 @@ CONST
     END
   END PutI32;
 
+  PROCEDURE PutLS(op, rt, rn, off: INTEGER);
+    VAR off_high, i, j: INTEGER;
+  BEGIN
+    IF off < 0 THEN off := -off;
+    ELSE 
+      INC(op, 200H);
+      IF off >= C16 THEN ORS.Mark("PutLS offset too big") END
+      IF off >= C8 THEN
+        off_high := c DIV C8;
+        i := GetMSB(c_high);
+        j := LSL(c_low, 7-i) MOD C7 + (24 + 7 - i)* C7
+        PutI12(32_ADD_exp12, RH, rn, j);
+        rn := RH
+      END
+      PutIns(op DIV C16 + rn)
+      PutIns(op MOD C16 + off MOD C8 + rt * C12)
+    END
+  END PutLS;
+
   PROCEDURE CheckRegs*;
   BEGIN
     IF RH # 0 THEN ORS.Mark("Reg Stack"); RH := 0 END ;
@@ -395,7 +420,7 @@ CONST
       IF (x.mode = Reg) THEN PutR32_1(VMOVA, x.r, x.r, 0) END;
     END;
     IF x.mode # Reg THEN
-      IF x.type.size = 1 THEN op := LDRB ELSE op := LDR_reg END;
+      IF x.type.size = 1 THEN op := 32_LDRB_imm8 ELSE op := 32_LDR_imm8 END;
       IF x.mode = ORB.Const THEN
         IF x.type.form = ORB.Proc THEN
           IF x.r > 0 THEN (*local*) ORS.Mark("not allowed")
@@ -403,38 +428,39 @@ CONST
             c := pc - x.a DIV 2 + 2;
             IF c >= C8 THEN
               c_low := c MOD C8;
-              i = GetMSB(c_low);
+              i := GetMSB(c_low);
               IF i >= 0 THEN
-                j = LSL(c_low, 7-i) MOD C7 + (7 - i -1 ) * C7
-                PutI12(32_SUB_imm12, RH, PC, j);
+                j := LSL(c_low, 7-i) MOD C7 + (7 - i -1 ) * C7
+                PutI12(32_SUB_exp12, RH, PC, j);
               END
               c_high := c DIV C8;
-              i = GetMSB(c_high);
-              j = LSL(c_low, 7-i) MOD C7 + (24 + 7 - i - 1 )* C7
-              PutI12(32_SUB_imm12, RH, RH, j);
+              i := GetMSB(c_high);
+              j := LSL(c_low, 7-i) MOD C7 + (24 + 7 - i - 1 )* C7
+              PutI12(32_SUB_exp12, RH, RH, j);
             ELSE
               (*Mov PC into RH then SUB imm8*)
               PutMOV(RH, PC);
               PutI8(SUB_imm8, RH, RH, c);
             END;
-          ELSE (*imported*) fixvar(x.r + 80H, x.a); PutI12(MOVT, RH, 0, 0); PutI8 (*TODO : replace MOVT usage *)
+          ELSE (*imported*) fixvar(x.r + 80H, x.a); PutI12(32_MOVT, RH, 0, 0); 
           END
         ELSE PutMOVI(RH, x.a)
         END;
         x.r := RH; incR
       ELSIF x.mode = ORB.Var THEN
-        IF x.r > 0 THEN (*local*) PutI8(LDR_sp_imm8, RH, x.a + frame)
-        ELSE fixvar(x.r, x.a); PutI32(MOVT, RH, 0, 0); PutI5(LDR_reg, RH, RH, 0) (*TODO : replace MOVT usage *)
+        IF x.r > 0 THEN (*local*) PutLS(op, RH, x.a + frame)
+        ELSE fixvar(x.r, x.a); PutI32(MOVT, RH, 0, 0); PutLS(op, RH, RH, 0)
         END ;
         x.r := RH; incR
       ELSIF x.mode = ORB.Par THEN 
-        PutI8(LDR_sp_imm8, RH, x.a + frame); 
-        PutI5(LDR_reg, RH, RH, x.b);
+        PutLS(32_LDR_imm8, RH, SP, x.a + frame); 
+        PutLS(32_LDR_imm8, RH, RH, x.b);
         x.r := RH; incR
-      ELSIF x.mode = RegI THEN PutI5(LDR_reg, x.r, x.r, x.a)
+      ELSIF x.mode = RegI THEN PutLS(op, x.r, x.r, x.a)
       ELSIF x.mode = Cond THEN 
         PutB(B, negated(x.r), 3 - dPC); 
-        FixLink(x.b); PutI
+        FixLink(x.b); PutI8(16_MOV_imm8, RH, 1); PutB16(16_B_cond_imm8, AL, 0);
+        FixLink(x.a); PutI8(16_MOV_imm8, RH, 0); x.r = RH; incR
       END ;
   END load;
 
