@@ -62,6 +62,9 @@ CONST
 
     32_VLDR = ED100A00H;  (* VLDR Sd, [Rn, #imm8] *)
 
+    32_CMP_exp12 = F1B00F00H;   (* CMP Rn, #const *)
+    32_CMP_reg = EBB00F00H;     (* CMP Rn, Rm *)
+
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
     LR = 14;  (* Link Register *)
@@ -532,24 +535,35 @@ CONST
 
   PROCEDURE loadCond(VAR x: Item);
   BEGIN
-    IF x.type.form = ORB.Bool THEN
-      IF x.mode = ORB.Const THEN x.r := 15 - x.a*8
-      ELSE load(x);
-        IF code[pc-1] DIV 40000000H # -2 THEN Put1(Cmp, x.r, x.r, 0) END ;
-        x.r := NE; DEC(RH)
-      END ;
-      x.mode := Cond; x.a := 0; x.b := 0
-    ELSE ORS.Mark("not Boolean?")
+    IF x.mode # Cond THEN 
+      IF x.type.form = ORB.Bool THEN
+        IF x.mode = ORB.Const THEN x.r := 15 - x.a
+        ELSE load(x);
+          PutI8(16_CMP_imm8, x.r, 0);
+          x.r := NE; DEC(RH)
+        END ;
+        x.mode := Cond; x.a := 0; x.b := 0
+      ELSE ORS.Mark("not Boolean?")
+      END
     END
   END loadCond;
 
   PROCEDURE loadTypTagAdr(T: ORB.Type);
-    VAR x: Item;
-  BEGIN x.mode := ORB.Var; x.a := T.len; x.r := -T.mno; loadAdr(x)
+  BEGIN 
+    IF T.mno <= 0 THEN fixvar(0, T.len); T.len := pc - 1 (*insert fixorgD chain, fixed up in Close*)
+    ELSE (*imported*) fixvar(- T.mno, 0);
+    END;
+    PutI16(32_MOVT, RH, 0, 0);
+    incR;
   END loadTypTagAdr;
 
   PROCEDURE loadStringAdr(VAR x: Item);
-  BEGIN GetSB(0); Put1a(Add, RH, RH, varsize+x.a); x.mode := Reg; x.r := RH; incR
+  BEGIN
+    IF x.r >= 0 THEN  fixvar(0, varx + x.a); 
+    ELSE (*imported*) fixvar(- x.r, x.a);
+    END;
+    PutI16(32_MOVT, RH, 0, 0);
+    x.mode := Reg; x.r := RH; incR
   END loadStringAdr;
 
   (* Items: Conversion from constants or from Objects on the Heap to Items on the Stack*)
@@ -572,22 +586,22 @@ CONST
     END
   END MakeStringItem;
 
-  PROCEDURE MakeItem*(VAR x: Item; y: ORB.Object; curlev: INTEGER);
-  BEGIN x.mode := y.class; x.type := y.type; x.a := y.val; x.rdo := y.rdo;
+  PROCEDURE MakeItem*(VAR x: Item; y: ORB.Object);
+  BEGIN x.obj := y; x.mode := y.class; x.type := y.type; x.a := y.val; x.rdo := y.rdo; x.deref := FALSE;
     IF y.class = ORB.Par THEN x.b := 0
-    ELSIF (y.class = ORB.Const) & (y.type.form = ORB.String) THEN x.b := y.lev  (*len*) ;
+    ELSIF (y.class = ORB.Const) & (y.type.form = ORB.String) THEN x.r := y.lev;
+      x.a = y.val MOD C20; (*strx/exno*) x.b := y.val DIV C20; (*len*)
     ELSE x.r := y.lev
     END ;
-    IF (y.lev > 0) & (y.lev # curlev) & (y.class # ORB.Const) THEN ORS.Mark("not accessible ") END
   END MakeItem;
 
   (* Code generation for Selectors, Variables, Constants *)
 
   PROCEDURE Field*(VAR x: Item; y: ORB.Object);   (* x := x.y *)
-  BEGIN;
+  BEGIN x.deref := FALSE;
     IF x.mode = ORB.Var THEN
       IF x.r >= 0 THEN x.a := x.a + y.val
-      ELSE loadAdr(x); x.mode := RegI; x.a := y.val
+      ELSE (*imported*) loadAdr(x); x.mode := RegI; x.a := y.val
       END
     ELSIF x.mode = RegI THEN x.a := x.a + y.val
     ELSIF x.mode = ORB.Par THEN x.b := x.b + y.val
@@ -596,21 +610,25 @@ CONST
 
   PROCEDURE Index*(VAR x, y: Item);   (* x := x[y] *)
     VAR s, lim: INTEGER;
-  BEGIN s := x.type.base.size; lim := x.type.len;
+  BEGIN s := x.type.base.size; lim := x.type.len; x.deref := FALSE;
+    IF (y.mode = ORB.Const) & (y.a < 0) THEN ORS.Mark("bad index") END;
     IF (y.mode = ORB.Const) & (lim >= 0) THEN
-      IF (y.a < 0) OR (y.a >= lim) THEN ORS.Mark("bad index") END ;
-      IF x.mode IN {ORB.Var, RegI} THEN x.a := y.a * s + x.a
+      IF y.a >= lim THEN ORS.Mark("bad index") END ;
+      IF x.mode = ORB.Var THEN
+        IF x.r >= 0 THEN x.a := y.a * s + x.a
+        ELSE (*imported*) loadAdr(x); x.mode := RegI; x.a := y.a * s
+        END
+      ELSIF x.mode = RegI THEN x.a := y.a * s + x.a
       ELSIF x.mode = ORB.Par THEN x.b := y.a * s + x.b
       END
     ELSE load(y);
       IF check THEN  (*check array bounds*)
-        IF lim >= 0 THEN Put1a(Cmp, RH, y.r, lim)
-        ELSE (*open array*)
-          IF x.mode IN {ORB.Var, ORB.Par} THEN Put2(Ldr, RH, SP, x.a+4+frame); Put0(Cmp, RH, y.r, RH)
-          ELSE ORS.Mark("error in Index")
-          END
+        IF lim >= 0 THEN PutI32(32_CMP_exp12, 0, y.r, lim, 32_CMP_reg)
+        ELSIF x.mode IN {ORB.Var, ORB.Par} THEN (*open array param*) PutLS(32_LDR_imm8, RH, SP, x.a + frame); PutR16(16_CMP_imm8, 0, y.r, RH)
+        ELSIF x.mode = RegI THEN (*dynamic open array*) PutLS(32_LDR_imm8, RH, x.r, -16); (*len*) PutR16(16_CMP_imm8, 0, y.r, RH)
+        ELSE ORS.Mark("error in Index")
         END ;
-        Trap(10, 1)  (*BCC*)
+        Trap(GE, 1)  
       END ;
       IF s = 4 THEN Put1(Lsl, y.r, y.r, 2) ELSIF s > 1 THEN Put1a(Mul, y.r, y.r, s) END ;
       IF x.mode = ORB.Var THEN
