@@ -44,6 +44,7 @@ CONST
     
     32_ADDS_exp12 = F1100000H;  (* ADDS Rd, Rn, #imm12 *)
     32_ADD_exp12 = F1000000H;   (* ADD Rd, Rn, #imm12 *)
+    32_ADD_reg = EB000000H;     (* ADD Rd, Rn, Rm *)
 
     32_B_cond_imm21 = F0008000H; (* B label *)
 
@@ -58,6 +59,8 @@ CONST
     32_VMOVV = EE000A10H;  (* VMOV Sn, Rt *)
 
     32_LDR_pc_imm12 = F85F0000H;  (* LDR Rt, [PC, #imm12] *)
+
+    32_VLDR = ED100A00H;  (* VLDR Sd, [Rn, #imm8] *)
 
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
@@ -163,12 +166,14 @@ CONST
 
   PROCEDURE PutR32_1(op, rd, rn, rm: INTEGER);
   BEGIN
-    PutIns(op + rd * C16 + rn * C12  + rm)
+    PutIns(op DIV C16 + rd)
+    PutIns(op MOD C16 + rn * C12 + rm)
   END PutR32_1;
 
   PROCEDURE PutR32_2(op, rd, rn, rm: INTEGER);
   BEGIN
-    PutIns(op + rd * C16 + rn * C8  + rm)
+    PutIns(op DIV C16 + rn)
+    PutIns(op MOD C16 + rd * C8  + rm)
   END PutR32_2;
 
   PROCEDURE PutI8(op, rdn, imm8: INTEGER);
@@ -248,12 +253,12 @@ CONST
     END
   END PutMOVI;
 
-  PROCEDURE PutI32(op, rd, rn, im: INTEGER);
+  PROCEDURE PutI32(op, rd, rn, im, op2: INTEGER);
   VAR c: INTEGER
   BEGIN
     IF DecomposeConst(im, c) THEN PutI12(op, rd, rn, c)
     ELSE PutMOVI(TR, im: INTEGER);
-      PutR(op, rd, rn, TR)
+      PutR32_2(op2, rd, rn, TR)
     END
   END PutI32;
 
@@ -275,6 +280,26 @@ CONST
       PutIns(op MOD C16 + off MOD C8 + rt * C12)
     END
   END PutLS;
+
+
+  PROCEDURE PutVLS(op, rt, rn, off: INTEGER);
+    VAR off_high, i, j: INTEGER;
+  BEGIN
+    INC(op, 800000H);
+    IF off < 0 THEN ORS.Mark("PutVLS negative offset") (* Maybe add neg offset ?*)
+    ELSIF off >= C8 
+      IF off >= C16 THEN ORS.Mark("PutVLS offset too big") END
+      ELSE 
+        off_high := c DIV C8;
+        i := GetMSB(c_high);
+        j := LSL(c_low, 7-i) MOD C7 + (24 + 7 - i)* C7
+        PutI12(32_ADD_exp12, RH, rn, j);
+        rn := RH
+        END;
+    END;
+    PutIns(op DIV C16 + rn)
+    PutIns(op MOD C16 + off MOD C8 + rt * C12)
+  END PutVLS;
 
   PROCEDURE CheckRegs*;
   BEGIN
@@ -449,7 +474,7 @@ CONST
         x.r := RH; incR
       ELSIF x.mode = ORB.Var THEN
         IF x.r > 0 THEN (*local*) PutLS(op, RH, x.a + frame)
-        ELSE fixvar(x.r, x.a); PutI32(32_MOVT, RH, 0, 0); PutLS(op, RH, RH, 0)
+        ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0); PutLS(op, RH, RH, 0)
         END ;
         x.r := RH; incR
       ELSIF x.mode = ORB.Par THEN 
@@ -467,15 +492,15 @@ CONST
   PROCEDURE loadAdr(VAR x: Item);
   BEGIN
     IF x.mode = ORB.Var THEN
-      IF x.r > 0 THEN (*local*) Put1a(Add, RH, SP, x.a + frame)
-      ELSE GetSB(x.r); Put1a(Add, RH, RH, x.a)
+      IF x.r > 0 THEN (*local*) PutI32(32_ADD_imm8, RH, SP, x.a + frame, 32_ADD_reg);
+      ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0);
       END ;
       x.r := RH; incR
-    ELSIF x.mode = ORB.Par THEN Put2(Ldr, RH, SP, x.a + frame);
-      IF x.b # 0 THEN Put1a(Add, RH, RH, x.b) END ;
+    ELSIF x.mode = ORB.Par THEN PutLS(32_LDR_pc_imm12, RH, SP, x.a + frame);
+      IF x.b # 0 THEN PutI32(32_ADD_imm8, RH, RH, x.b, 32_ADD_reg) END ;
       x.r := RH; incR
     ELSIF x.mode = RegI THEN
-      IF x.a # 0 THEN Put1a(Add, x.r, x.r, x.a) END
+      IF x.a # 0 THEN PutI32(32_ADD_imm8, x.r, x.r, x.a, 32_ADD_reg) END
     ELSE ORS.Mark("address error")
     END ;
     x.mode := Reg
@@ -483,7 +508,7 @@ CONST
 
 
   PROCEDURE loadf(VAR x: Item);
-    CONST op = VLDRS 
+    CONST op = 32_VLDR_imm8;
   BEGIN
     IF (x.type # ORB.realType) THEN ORS.Mark("loadf 0") END;
     IF x.mode # Reg THEN
@@ -494,7 +519,7 @@ CONST
         x.r := RH; incR
       ELSIF x.mode = ORB.Var THEN
         IF x.r > 0 THEN (*local*) PutVLS(op, RH, SP, x.a + frame)
-        ELSE fixvar(x.r, x.a); PutI32(32_MOVT, RH, 0, 0); PutVLS(op, RH, RH, 0);
+        ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0); PutVLS(op, RH, RH, 0);
         END ;
         x.r := RH; incR
       ELSIF x.mode = ORB.Par THEN PutLS(32_LDR_imm8, RH, SP, x.a + frame); PutVLS(op, RH, RH, x.b); x.r := RH; incR
