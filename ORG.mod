@@ -806,14 +806,14 @@ CONST
     IF op = ORS.plus THEN
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a + y.a
       ELSIF y.mode = ORB.Const THEN load(x);
-        IF y.a # 0 THEN Put1a(Add, x.r, x.r, y.a) END
-      ELSE load(x); load(y); Put0(Add, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
+        IF y.a # 0 THEN PutI32(32_ADD_imm8, x.r, x.r, y.a, 32_ADD_reg) END
+      ELSE load(x); load(y); PutR32_2(32_ADD_reg, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
       END
     ELSE (*op = ORS.minus*)
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a - y.a
       ELSIF y.mode = ORB.Const THEN load(x);
-        IF y.a # 0 THEN Put1a(Sub, x.r, x.r, y.a) END
-      ELSE load(x); load(y); Put0(Sub, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
+        IF y.a # 0 THEN PutI32(32_SUB_imm8, x.r, x.r, y.a, 32_SUB_reg) END
+      ELSE load(x); load(y); PutR32_2(32_SUB_reg, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
       END
     END
   END AddOp;
@@ -828,11 +828,14 @@ CONST
     VAR e: INTEGER;
   BEGIN
     IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a * y.a
-    ELSIF (y.mode = ORB.Const) & (y.a >= 2) & (log2(y.a, e) = 1) THEN load(x); Put1(Lsl, x.r, x.r, e)
-    ELSIF y.mode = ORB.Const THEN load(x); Put1a(Mul, x.r, x.r, y.a)
-    ELSIF (x.mode = ORB.Const) & (x.a >= 2) & (log2(x.a, e) = 1) THEN load(y); Put1(Lsl, y.r, y.r, e); x.mode := Reg; x.r := y.r
-    ELSIF x.mode = ORB.Const THEN load(y); Put1a(Mul, y.r, y.r, x.a); x.mode := Reg; x.r := y.r
-    ELSE load(x); load(y); Put0(Mul, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
+    ELSIF (y.mode = ORB.Const) & (y.a >= 1) & (log2(y.a, e) = 1) THEN load(x);
+      IF e # 0 THEN PutR32_2(32_LSL_imm5, x.r, 0, x.r + LSL(e,7)) END
+    ELSIF (x.mode = ORB.Const) & (x.a >= 1) & (log2(x.a, e) = 1)  THEN load(y); 
+      IF e # 0 THEN PutR32_2(32_LSL_imm5, x.r, 0, x.r + LSL(e,7)) END; x.mode := Reg; x.r := y.r
+    ELSE 
+      IF (x.mode = ORB.Const) & (x.a = 0) THEN 
+      ELSIF (y.mode = ORB.Const) & (y.a = 0) THEN x.mode := ORB.Const; x.a := 0;
+      ELSE load(x); load(y); PutR32_2(32_MUL_reg, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
     END
   END MulOp;
 
