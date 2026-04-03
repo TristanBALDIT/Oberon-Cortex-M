@@ -47,6 +47,17 @@ CONST
     32_ADD_exp12 = F1000000H;   (* ADD Rd, Rn, #imm12 *)
     32_ADD_reg = EB000000H;     (* ADD Rd, Rn, Rm *)
 
+    32_SUB_reg = EBA00000H;     (* SUB Rd, Rn, Rm *)
+
+    32_ORR_exp12 = F0400000H;   (* ORR Rd, Rn, #imm12 *)
+    32_ORR_reg = EA400000H;     (* ORR Rd, Rn, Rm *)
+    32_BIC_exp12 = F0200000H;   (* BIC Rd, Rn, #imm12 *)
+    32_BIC_reg = EA200000H;     (* BIC Rd, Rn, Rm *)
+    32_AND_exp12 = F0000000H;   (* AND Rd, Rn, #imm12 *)
+    32_AND_reg = EA000000H;     (* AND Rd, Rn, Rm *)
+    32_EOR_exp12 = F0800000H;   (* EOR Rd, Rn, #imm12 *)
+    32_EOR_reg = EA800000H;     (* EOR Rd, Rn, Rm *)
+
     32_RSB_exp12 = F1C00000H;   (* RSB Rd, Rn, #imm12 *)
 
     32_B_cond_imm21 = F0008000H; (* B label *)
@@ -62,6 +73,10 @@ CONST
     32_VMOVA = EE100A10H;  (* VMOV Rt, Sn *)
     32_VMOVV = EE000A10H;  (* VMOV Sn, Rt *)
 
+    32_VADD = EE300A00H;   (* VADD Sd, Sn, Sm *)
+    32_VSUB = EE300A40H;   (* VSUB Sd, Sn, Sm *)
+    32_VMUL = EE200A00H;   (* VMUL Sd, Sn, Sm *)
+    32_VDIV = EE800A00H;   (* VDIV Sd, Sn, Sm *)
     32_VNEG = EEB10A40H;   (* VNEG Sd, Sm *)
 
     32_LDR_pc_imm12 = F85F0000H;  (* LDR Rt, [PC, #imm12] *)
@@ -72,8 +87,15 @@ CONST
     32_CMP_reg = EBB00F00H;     (* CMP Rn, Rm *)
 
     32_LSL_imm5 = EA4F0000H;  (* LSL Rd, Rn, #imm5 *)
+    32_LSL_reg = FA00F000H;   (* LSL Rd, Rn, Rm *)
+    32_ASR_imm5 = EA4F0020H;  (* ASR Rd, Rn, #imm5 *)
+    32_RORS_imm5 = EA5F0030H;  (* RORS Rd, Rn, #imm5 *)
 
     32_MUL_reg = FB00F000H;     (* MUL Rd, Rn, Rm *)
+    32_SDIV_reg = FB90F0F0H;    (* SDIV Rd, Rn, Rm *)
+    32_MLS_reg = FB000010H;     (* MLS Rd, Rn, Rm, Ra *)
+
+    32_UBFX = F3C00000H;    (* UBFX Rd, Rn, #lsb, #width *)
 
     (* Registres dédiés ARM *)
     SP = 13;  (* Stack Pointer *)
@@ -230,6 +252,12 @@ CONST
     IF rd > 7 THEN d := 1; rd := rd - 8  ELSE d := 0 END;  
     PutIns(16_MOV_reg + D * C7 + rm * C3 + rd)
   END PutMOV;
+
+  PROCEDURE PutMUL(op, rd, rn, rm, ra: INTEGER);
+  BEGIN 
+    PutIns(op DIV C16 + rn)
+    PutIns(op MOD C16 + ra * C12 + rd * C8 + rm)
+  END PutMUL;
 
   PROCEDURE PutI12(op, rd, rn, imm12: INTEGER);
   BEGIN
@@ -829,9 +857,9 @@ CONST
   BEGIN
     IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a * y.a
     ELSIF (y.mode = ORB.Const) & (y.a >= 1) & (log2(y.a, e) = 1) THEN load(x);
-      IF e # 0 THEN PutR32_2(32_LSL_imm5, x.r, 0, x.r + LSL(e,7)) END
+      IF e # 0 THEN PutR32_2(32_LSL_imm5, x.r, 0, x.r + LSL(e MOD C2,6) + LSL(e DIV C2,12)) END
     ELSIF (x.mode = ORB.Const) & (x.a >= 1) & (log2(x.a, e) = 1)  THEN load(y); 
-      IF e # 0 THEN PutR32_2(32_LSL_imm5, x.r, 0, x.r + LSL(e,7)) END; x.mode := Reg; x.r := y.r
+      IF e # 0 THEN PutR32_2(32_LSL_imm5, x.r, 0, x.r + LSL(e MOD C2,6) + LSL(e DIV C2,12)) END; x.mode := Reg; x.r := y.r
     ELSE 
       IF (x.mode = ORB.Const) & (x.a = 0) THEN 
       ELSIF (y.mode = ORB.Const) & (y.a = 0) THEN x.mode := ORB.Const; x.a := 0;
@@ -840,28 +868,40 @@ CONST
   END MulOp;
 
   PROCEDURE DivOp*(op: INTEGER; VAR x, y: Item);   (* x := x op y *)
-    VAR e: INTEGER;
+    VAR e: INTEGER; yc: BOOLEAN;
   BEGIN
+    yc := y.mode = ORB.Const;
     IF op = ORS.div THEN
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN
         IF y.a > 0 THEN x.a := x.a DIV y.a ELSE ORS.Mark("bad divisor") END
-      ELSIF (y.mode = ORB.Const) & (y.a >= 2) & (log2(y.a, e) = 1) THEN load(x); Put1(Asr, x.r, x.r, e)
-      ELSIF y.mode = ORB.Const THEN
-        IF y.a > 0 THEN load(x); Put1a(Div, x.r, x.r, y.a) ELSE ORS.Mark("bad divisor") END
-      ELSE load(y);
-        IF check THEN Trap(LE, 6) END ;
-        load(x); Put0(Div, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
+      ELSIF yc & (y.a >= 1) & (log2(y.a, e) = 1) THEN load(x); 
+        IF e # 0 THEN PutR32_2(32_ASR_imm5, x.r, 0, x.r + LSL(e MOD C2,6) + LSL(e DIV C2,12)) END
+      ELSIF
+        IF yc & (y.a <= 0) THEN ORS.Mark("bad divisor")
+        ELSE load(x); load(y);
+          PutR32_2(32_SUB_reg, RH, x.r, y.r + 64 + LSL(7,7) + LSL(24,12)); 
+          PutR32_2(32_SDIV_reg, RH, RH, y.r);
+          IF ~yc & check THEN PutI8(16_CMP_imm8, y.r, 0); Trap(LE, TrapDivZero) END;
+          PutR32_2(32_ADD_reg, RH-2, x.r, y.r + 64 + LSL(7,7) + LSL(24,12)); 
+          DEC(RH); x.r := RH-1
+        END;
       END
     ELSE (*op = ORS.mod*)
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN
         IF y.a > 0 THEN x.a := x.a MOD y.a ELSE ORS.Mark("bad modulus") END
-      ELSIF (y.mode = ORB.Const) & (y.a >= 2) & (log2(y.a, e) = 1) THEN load(x);
-        IF e <= 16 THEN Put1(And, x.r, x.r, y.a-1) ELSE Put1(Lsl, x.r, x.r, 32-e); Put1(Ror, x.r, x.r, 32-e) END
-      ELSIF y.mode = ORB.Const THEN
-        IF y.a > 0 THEN load(x); Put1a(Div, x.r, x.r, y.a); Put0(Mov+U, x.r, 0, 0) ELSE ORS.Mark("bad modulus") END
-      ELSE load(y);
-        IF check THEN Trap(LE, 6) END ;
-        load(x); Put0(Div, RH-2, x.r, y.r); Put0(Mov+U, RH-2, 0, 0); DEC(RH); x.r := RH-1
+      ELSIF yc & (y.a >= 1) & (log2(y.a, e) = 1) THEN load(x);
+        IF e = 0 THEN x.mode := ORB.Const; x.a := 0
+        ELSE PutR32_2(32_UBFX, x.r, x.r, e-1)
+        END
+      ELSE
+        IF yc & (y.a <= 0) THEN ORS.Mark("bad modulus")
+        ELSE load(x); load(y);
+          PutR32_2(32_SUB_reg, RH, x.r, y.r + 64 + LSL(7,7) + LSL(24,12)); 
+          PutR32_2(32_SDIV_reg, RH, RH, y.r);
+          IF ~yc & check THEN PutI8(16_CMP_imm8, y.r, 0); Trap(LE, TrapDivZero) END;
+          PutR32_2(32_ADD_reg, RH-1, RH, y.r + 64 + LSL(7,7) + LSL(24,12));
+          PutMUL(32_MLS_reg, RH-2, RH, y.r, x.r); 
+          DEC(RH); x.r := RH-1
       END
     END
   END DivOp;
@@ -869,11 +909,11 @@ CONST
   (* Code generation for REAL operators *)
 
   PROCEDURE RealOp*(op: INTEGER; VAR x, y: Item);   (* x := x op y *)
-  BEGIN load(x); load(y);
-    IF op = ORS.plus THEN Put0(Fad, RH-2, x.r, y.r)
-    ELSIF op = ORS.minus THEN Put0(Fsb, RH-2, x.r, y.r)
-    ELSIF op = ORS.times THEN Put0(Fml, RH-2, x.r, y.r)
-    ELSIF op = ORS.rdiv THEN Put0(Fdv, RH-2, x.r, y.r)
+  BEGIN loadf(x); loadf(y);
+    IF op = ORS.plus THEN PutR32_1(VADD, RH-2, x.r, y.r)
+    ELSIF op = ORS.minus THEN PutR32_1(VSUB, RH-2, x.r, y.r)
+    ELSIF op = ORS.times THEN PutR32_1(VMUL, RH-2, x.r, y.r)
+    ELSIF op = ORS.rdiv THEN PutR32_1(VDIV, RH-2, x.r, y.r)
     END ;
     DEC(RH); x.r := RH-1
   END RealOp;
@@ -883,7 +923,7 @@ CONST
   PROCEDURE Singleton*(VAR x: Item);  (* x := {x} *)
   BEGIN
     IF x.mode = ORB.Const THEN x.a := LSL(1, x.a) 
-    ELSE load(x); Put1(Mov, RH, 0, 1); Put0(Lsl, x.r, RH,  x.r)
+    ELSE load(x); PutI8(16_MOV_imm8, RH, 1); PutR32_2(32_LSL_reg, x.r, RH, x.r)
     END
   END Singleton;
 
@@ -892,24 +932,23 @@ CONST
     IF (x.mode = ORB.Const) & ( y.mode = ORB.Const) THEN
       IF x.a <= y.a THEN x.a := LSL(2, y.a) - LSL(1, x.a) ELSE x.a := 0 END
     ELSE
-      IF (x.mode = ORB.Const) & (x.a <= 16) THEN x.a := LSL(-1, x.a)
-      ELSE load(x); Put1(Mov, RH, 0, -1); Put0(Lsl, x.r, RH, x.r)
+      IF (x.mode = ORB.Const) THEN x.a := LSL(1, x.a)
+      ELSE load(x); PutI12(32_MOV_exp12, RH, 0, 1); PutR32_2(32_LSL_reg, x.r, RH, x.r); x.r := RH -1;
       END ;
-      IF (y.mode = ORB.Const) & (y.a < 16) THEN Put1(Mov, RH, 0, LSL(-2, y.a)); y.mode := Reg; y.r := RH; incR
-      ELSE load(y); Put1(Mov, RH, 0, -2); Put0(Lsl, y.r, RH, y.r)
+      IF (y.mode = ORB.Const) THEN PutI12(32_MOV_exp12, RH, 0, LSL(2, y.a)); y.mode := Reg; y.r := RH; incR
+      ELSE load(y); PutI12(32_MOV_exp12, RH, 0, 2); PutR32_2(32_LSL_reg, y.r, RH, y.r)
       END ;
-      IF x.mode = ORB.Const THEN
-        IF x.a # 0 THEN Put1(Xor, y.r, y.r, -1); Put1a(And, RH-1, y.r, x.a) END ;
-        x.mode := Reg; x.r := RH-1
-      ELSE DEC(RH); Put0(Ann, RH-1, x.r, y.r)
+      IF x.mode = ORB.Const THEN PutI32(32_ADD_imm8, RH-1, y.r, -x.a, 32_ADD_reg); x.mode := Reg;
+      ELSE DEC(RH); PutR32_2(32_SUB_reg, RH-1, x.r, y.r)
       END
+      x.r := RH-1;
     END
   END Set;
 
   PROCEDURE In*(VAR x, y: Item);  (* x := x IN y *)
   BEGIN load(y);
-    IF x.mode = ORB.Const THEN Put1(Ror, y.r, y.r, (x.a + 1) MOD 20H); DEC(RH)
-    ELSE load(x); Put1(Add, x.r, x.r, 1); Put0(Ror, y.r, y.r, x.r); DEC(RH, 2)
+    IF x.mode = ORB.Const THEN PutR32_2(Ror, y.r, 0, y.r +  LSL((x.a + 1) MOD maxSet MOD C2,6) + LSL((x.a + 1) MOD maxSet DIV C2,12)); DEC(RH)
+    ELSE load(x); PutI12(32_MOV_exp12, x.r, x.r, 1); PutR32_2(32_RORS_reg, y.r, y.r, x.r); DEC(RH, 2)
     END ;
     SetCC(x, MI)
   END In;
@@ -927,16 +966,16 @@ CONST
       x.a := SYSTEM.VAL(INTEGER, xset)
     ELSIF y.mode = ORB.Const THEN
       load(x);
-      IF op = ORS.plus THEN Put1a(Ior, x.r, x.r, y.a)
-      ELSIF op = ORS.minus THEN Put1a(Ann, x.r, x.r, y.a)
-      ELSIF op = ORS.times THEN Put1a(And, x.r, x.r, y.a)
-      ELSIF op = ORS.rdiv THEN Put1a(Xor, x.r, x.r, y.a)
+      IF op = ORS.plus THEN PutI32(32_ORR_imm8, x.r, x.r, y.a, 32_ORR_reg)
+      ELSIF op = ORS.minus THEN PutI32(32_BIC_imm8, x.r, x.r, y.a, 32_BIC_reg)
+      ELSIF op = ORS.times THEN PutI32(32_AND_imm8, x.r, x.r, y.a, 32_AND_reg)
+      ELSIF op = ORS.rdiv THEN PutI32(32_EOR_imm8, x.r, x.r, y.a, 32_EOR_reg)
       END ;
     ELSE load(x); load(y);
-      IF op = ORS.plus THEN Put0(Ior, RH-2, x.r, y.r)
-      ELSIF op = ORS.minus THEN Put0(Ann, RH-2, x.r, y.r)
-      ELSIF op = ORS.times THEN Put0(And, RH-2, x.r, y.r)
-      ELSIF op = ORS.rdiv THEN Put0(Xor, RH-2, x.r, y.r)
+      IF op = ORS.plus THEN PutR32_2(32_ORR_reg, RH-2, x.r, y.r)
+      ELSIF op = ORS.minus THEN PutR32_2(32_BIC_reg, RH-2, x.r, y.r)
+      ELSIF op = ORS.times THEN PutR32_2(32_AND_reg, RH-2, x.r, y.r)
+      ELSIF op = ORS.rdiv THEN PutR32_2(32_EOR_reg, RH-2, x.r, y.r)
       END ;
       DEC(RH); x.r := RH-1
     END 
