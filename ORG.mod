@@ -79,9 +79,17 @@ CONST
     32_VDIV = EE800A00H;   (* VDIV Sd, Sn, Sm *)
     32_VNEG = EEB10A40H;   (* VNEG Sd, Sm *)
 
+    32_VCMP = EEB40A40H;    (* VCMP Sd, Sm *)
+    32_VCMPZ = EEB50A40H;  (* VCMPZ Sd, #0 *)
+    32_VMRS = EEF00A10H;   (* VMRS Rn, spec_reg *)
+
     32_LDR_pc_imm12 = F85F0000H;  (* LDR Rt, [PC, #imm12] *)
+    32_LDR_imm8_i = F8500C00H;  (* LDR Rt, [Rn, #imm8] *)
+    32_LDRB_imm8_i = F8100C00H;  (* LDRB Rt, [Rn, #imm8] *)
+    32_LDRB_imm8_w = F8100900H;  (* LDRB Rt, [Rn, #imm8] *)
 
     32_VLDR = ED100A00H;  (* VLDR Sd, [Rn, #imm8] *)
+    32_VSTR = ED000A00H;  (* VSTR Sd, [Rn, #imm8] *)
 
     32_CMP_exp12 = F1B00F00H;   (* CMP Rn, #const *)
     32_CMP_reg = EBB00F00H;     (* CMP Rn, Rm *)
@@ -486,7 +494,7 @@ CONST
       IF (x.mode = Reg) THEN PutR32_1(VMOVA, x.r, x.r, 0) END;
     END;
     IF x.mode # Reg THEN
-      IF x.type.size = 1 THEN op := 32_LDRB_imm8 ELSE op := 32_LDR_imm8 END;
+      IF x.type.size = 1 THEN op := 32_LDRB_imm8 ELSE op := 32_LDR_imm8_i END;
       IF x.mode = ORB.Const THEN
         IF x.type.form = ORB.Proc THEN
           IF x.r > 0 THEN (*local*) ORS.Mark("not allowed")
@@ -519,8 +527,8 @@ CONST
         END ;
         x.r := RH; incR
       ELSIF x.mode = ORB.Par THEN 
-        PutLS(32_LDR_imm8, RH, SP, x.a + frame); 
-        PutLS(32_LDR_imm8, RH, RH, x.b);
+        PutLS(32_LDR_imm8_i, RH, SP, x.a + frame); 
+        PutLS(32_LDR_imm8_i, RH, RH, x.b);
         x.r := RH; incR
       ELSIF x.mode = RegI THEN PutLS(op, x.r, x.r, x.a)
       ELSIF x.mode = Cond THEN 
@@ -563,7 +571,7 @@ CONST
         ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0); PutVLS(op, RH, RH, 0);
         END ;
         x.r := RH; incR
-      ELSIF x.mode = ORB.Par THEN PutLS(32_LDR_imm8, RH, SP, x.a + frame); PutVLS(op, RH, RH, x.b); x.r := RH; incR
+      ELSIF x.mode = ORB.Par THEN PutLS(32_LDR_imm8_i, RH, SP, x.a + frame); PutVLS(op, RH, RH, x.b); x.r := RH; incR
       ELSIF x.mode = RegI THEN PutVLS(op, x.r, x.r, x.a)
       ELSIF x.mode = Cond THEN ORS.Mark("loadf 2")
       END ;
@@ -662,8 +670,8 @@ CONST
     ELSE load(y);
       IF check THEN  (*check array bounds*)
         IF lim >= 0 THEN PutI32(32_CMP_exp12, 0, y.r, lim, 32_CMP_reg)
-        ELSIF x.mode IN {ORB.Var, ORB.Par} THEN (*open array param*) PutLS(32_LDR_imm8, RH, SP, x.a + frame); PutR16(16_CMP_imm8, 0, y.r, RH)
-        ELSIF x.mode = RegI THEN (*dynamic open array*) PutLS(32_LDR_imm8, RH, x.r, -16); (*len*) PutR16(16_CMP_imm8, 0, y.r, RH)
+        ELSIF x.mode IN {ORB.Var, ORB.Par} THEN (*open array param*) PutLS(32_LDR_imm8_i, RH, SP, x.a + frame); PutR16(16_CMP_imm8, 0, y.r, RH)
+        ELSIF x.mode = RegI THEN (*dynamic open array*) PutLS(32_LDR_imm8_i, RH, x.r, -16); (*len*) PutR16(16_CMP_imm8, 0, y.r, RH)
         ELSE ORS.Mark("error in Index")
         END ;
         Trap(GE, 1)  
@@ -678,7 +686,7 @@ CONST
         END ;
         x.r := y.r; x.mode := RegI
       ELSIF x.mode = ORB.Par THEN
-        PutLS(32_LDR_imm8, RH, SP, x.a + frame);
+        PutLS(32_LDR_imm8_i, RH, SP, x.a + frame);
         PutR32_2(32_ADD_reg, y.r, RH, y.r); x.mode := RegI; x.r := y.r; x.a := x.b
       ELSIF x.mode = RegI THEN PutR32_2(32_ADD_reg, x.r, x.r, y.r); DEC(RH)
       END
@@ -688,12 +696,12 @@ CONST
   PROCEDURE DeRef*(VAR x: Item);
   BEGIN
     IF x.mode = ORB.Var THEN
-      IF x.r > 0 THEN (*local*) PutLS(32_LDR_imm8, RH, SP, x.a + frame) 
-      ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0); PutLS(32_LDR_imm8, RH, RH, 0) END ;
+      IF x.r > 0 THEN (*local*) PutLS(32_LDR_imm8_i, RH, SP, x.a + frame) 
+      ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0); PutLS(32_LDR_imm8_i, RH, RH, 0) END ;
       NilCheck(RH); x.r := RH; incR
     ELSIF x.mode = ORB.Par THEN
-      PutLS(32_LDR_imm8, RH, SP, x.a + frame); PutLS(32_LDR_imm8, RH, RH, x.b); NilCheck(RH); x.r := RH; incR
-    ELSIF x.mode = RegI THEN PutLS(32_LDR_imm8, x.r, x.r, x.a); NilCheck(x.r)
+      PutLS(32_LDR_imm8_i, RH, SP, x.a + frame); PutLS(32_LDR_imm8_i, RH, RH, x.b); NilCheck(RH); x.r := RH; incR
+    ELSIF x.mode = RegI THEN PutLS(32_LDR_imm8_i, x.r, x.r, x.a); NilCheck(x.r)
     ELSIF x.mode # Reg THEN ORS.Mark("bad mode in DeRef")
     END ;
     IF x.type.base.form = ORB.Array THEN PutI8(16_ADDS_imm8, x.r, 16) END ; (*point to array*)
@@ -770,12 +778,12 @@ CONST
       IF x.mode >= Reg THEN DEC(RH) END ;
       SetCC(x, 7)
     ELSE (*fetch tag into RH*)
-      IF varpar THEN PutLS(32_LDR_imm8, RH, SP, x.a+4+frame)
+      IF varpar THEN PutLS(32_LDR_imm8_i, RH, SP, x.a+4+frame)
       ELSE load(x);
         pc0 := pc; Put3(BC, EQ, 0);  (*NIL belongs to every pointer type*)
-        PutLS(32_LDR_imm8, RH, x.r, -8)
+        PutLS(32_LDR_imm8_i, RH, x.r, -8)
       END ;
-      PutLS(32_LDR_imm8, RH, RH, T.nofpar*4); incR;
+      PutLS(32_LDR_imm8_i, RH, RH, T.nofpar*4); incR;
       loadTypTagAdr(T);  (*tag of T*)
       PutR32_2(32_CMP_reg, 0, RH-1, RH-2); DEC(RH, 2);
       IF ~varpar THEN fixB(pc0, pc - pc0) END ;
@@ -984,22 +992,22 @@ CONST
   (* Code generation for relations *)
 
   PROCEDURE IntRelation*(op: INTEGER; VAR x, y: Item);   (* x := x < y *)
+  VAR op2, op3: INTEGER;
   BEGIN
     IF (y.mode = ORB.Const) & (y.type.form # ORB.Proc) THEN
-      load(x);
-      IF (y.a # 0) OR ~(op IN {ORS.eql, ORS.neq}) OR (code[pc-1] DIV 40000000H # -2) THEN Put1a(Cmp, x.r, x.r, y.a) END ;
-      DEC(RH)
+      IF y.a < 0 THEN op2 := 32_CMN_exp12; op3 := 32_CMN_reg; y.a := -y.a ELSE op2 := 32_CMP_exp12; op3 := 32_CMP_reg END ;
+        load(x); PutI32(op2, 0, x.r, y.a); DEC(RH);
     ELSE
       IF (x.mode = Cond) OR (y.mode = Cond) THEN ORS.Mark("not implemented") END ;
-      load(x); load(y); Put0(Cmp, x.r, x.r, y.r); DEC(RH, 2)
+      load(x); load(y); PutR32_2(32_CMP_reg, 0, x.r, y.r); DEC(RH, 2)
     END ;
     SetCC(x, relmap[op - ORS.eql])
   END IntRelation;
 
   PROCEDURE RealRelation*(op: INTEGER; VAR x, y: Item);   (* x := x < y *)
-  BEGIN load(x);
-    IF (y.mode = ORB.Const) & (y.a = 0) THEN DEC(RH)
-    ELSE load(y); Put0(Fsb, x.r, x.r, y.r); DEC(RH, 2)
+  BEGIN loadf(x);
+    IF (y.mode = ORB.Const) & (y.a = 0) THEN PutR32_1(32_VCMPZ, 0, x.r, 0); PutR32_1(32_VMRS, 1, 15, 0); DEC(RH)
+    ELSE loadf(y); PutR32_1(32_VCMP, 0, x.r, y.r); PutR32_1(32_VMRS, 1, 15, 0); DEC(RH, 2)
     END ;
     SetCC(x, relmap[op - ORS.eql])
   END RealRelation;
@@ -1009,11 +1017,11 @@ CONST
   BEGIN
     IF x.type.form = ORB.String THEN loadStringAdr(x) ELSE loadAdr(x) END ;
     IF y.type.form = ORB.String THEN loadStringAdr(y) ELSE loadAdr(y) END ;
-    Put2(Ldr+1, RH, x.r, 0); Put1(Add, x.r, x.r, 1);
-    Put2(Ldr+1, RH+1, y.r, 0); Put1(Add, y.r, y.r, 1);
-    Put0(Cmp, RH+2, RH, RH+1); Put3(BC, NE, 2);
-    Put1(Cmp, RH+2, RH, 0); Put3(BC, NE, -8);
-    DEC(RH, 2); SetCC(x, relmap[op - ORS.eql])
+    PutLS(32_LDRB_imm8_w, RH, x.r, 1); incR;
+    PutLS(32_LDRB_imm8_w, RH, y.r, 1); incR;
+    PutR32_2(32_CMP_reg, 0, RH-2, RH-1); PutB32(32_B_cond_imm21, NE, 3 - 2);  (*check offset*)
+    PutI12(32_CMP_exp12, 0, RH-2, 0); PutB32(32_B_cond_imm21, NE, - 5 - 2);
+    DEC(RH, 4); SetCC(x, relmap[op - ORS.eql])
   END StringRelation;
 
   (* Code generation of Assignments *)
@@ -1025,45 +1033,63 @@ CONST
   PROCEDURE Store*(VAR x, y: Item); (* x := y *)
     VAR op: INTEGER;
   BEGIN  load(y);
-    IF x.type.size = 1 THEN op := Str+1 ELSE op := Str END ;
+    IF x.type.size = 1 THEN op := 32_STRB_imm8_w ELSE op := 32_STR_imm8_i END ;  (*carefull for the opcode used*)
     IF x.mode = ORB.Var THEN
-      IF x.r > 0 THEN (*local*) Put2(op, y.r, SP, x.a + frame)
-      ELSE GetSB(x.r); Put2(op, y.r, RH, x.a)
+      IF x.r > 0 THEN (*local*) PutLS(op, y.r, SP, x.a + frame)
+      ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0); PutLS(op, y.r, RH, 0)
       END
-    ELSIF x.mode = ORB.Par THEN Put2(Ldr, RH, SP, x.a + frame); Put2(op, y.r, RH, x.b);
-    ELSIF x.mode = RegI THEN Put2(op, y.r, x.r, x.a); DEC(RH);
+    ELSIF x.mode = ORB.Par THEN PutLS(32_LDR_imm8_i, RH, SP, x.a + frame); PutLS(op, y.r, RH, x.b);
+    ELSIF x.mode = RegI THEN PutLS(op, y.r, x.r, x.a); DEC(RH);
     ELSE ORS.Mark("bad mode in Store")
     END ;
     DEC(RH)
   END Store;
 
+  PROCEDURE Storef(VAR x, y: Item); (* x := y*)
+  CONST op = 32_VSTR;
+  BEGIN loadf(y);
+    IF x.type # ORB.realType THEN ORS.Mark("Storef 0") END;
+    IF x.mode = ORB.Var THEN
+      IF x.r > 0 THEN (*local*) PutVLS(op, y.r, SP, x.a + frame)
+      ELSE fixvar(x.r, x.a); PutI16(32_MOVT, RH, 0, 0); PutVLS(op, y.r, RH, x.b);
+      END;
+    ELSIF x.mode = ORB.Par THEN PutLS(32_LDR_imm8_i, RH, SP, x.a + frame); PutVLS(op, y.r, RH, x.b);
+    ELSIF x.mode = RegI THEN PutVLS(op, y.r, x.r, x.a); DEC(RH);
+    ELSE ORS.Mark("bad mode in Storef")
+    END ;
+    DEC(RH);
+  END Storef;
+
   PROCEDURE StoreStruct*(VAR x, y: Item); (* x := y, frame = 0 *)
     VAR s, pc0: INTEGER;
-  BEGIN
-    IF y.type.size # 0 THEN
-      loadAdr(x); loadAdr(y);
-      IF (x.type.form = ORB.Array) &  (x.type.len > 0) THEN
-        IF y.type.len >= 0 THEN 
-          IF x.type.size = y.type.size THEN Put1a(Mov, RH, 0, (y.type.size+3) DIV 4)
-          ELSE ORS.Mark("different length/size, not implemented")
-          END
-        ELSE (*y  open array*) Put2(Ldr, RH, SP, y.a+4); s := y.type.base.size;  (*element size*)
-          pc0 := pc; Put3(BC, EQ, 0);
-          IF s = 1 THEN Put1(Add, RH, RH, 3); Put1(Asr, RH, RH, 2)
-          ELSIF s # 4 THEN Put1a(Mul, RH, RH, s DIV 4)
-          END ;
-          IF check THEN
-            Put1a(Mov, RH+1, 0, (x.type.size+3) DIV 4); Put0(Cmp, RH+1, RH, RH+1); Trap(GT, 3)
-          END ;
-          fix(pc0, pc + 5 - pc0)
+  BEGIN loadAdr(x); loadAdr(y);
+    If(x.type.form = ORB.Array) & (x.type.len > 0) THEN 
+      IF y.type.len >= 0 THEN
+        IF x.type.size = y.type.size THEN PutMOVI(RH, (y.type.size+3) DIV 4)
+        ELSE ORS.Mark("different lenght/size, not implemented")
         END
-      ELSIF x.type.form = ORB.Record THEN Put1a(Mov, RH, 0, x.type.size DIV 4)
-      ELSE ORS.Mark("inadmissible assignment")
-      END ;
-      Put2(Ldr, RH+1, y.r, 0); Put1(Add, y.r, y.r, 4);
-      Put2(Str, RH+1, x.r, 0); Put1(Add, x.r, x.r, 4);
-      Put1(Sub, RH, RH, 1); Put3(BC, NE, -6)
+      ELSE (*y open array param of dynamic open array*)
+        IF y.type.size > 0 THEN PutLS(32_LDR_imm8_i, RH, SP, y.a+4); ELSE PutLS(32_LDR_imm8_i, RH, y.r, -16) END ; (*len*)
+        s := y.type.base.size; (*element size*)
+        PutI12(32_CMP_exp12, 0, RH, 0); pc0 := pc; PutB32(32_B_cond_imm21, EQ, 0);
+        IF s = 1 THEN 
+          PutI12(32_ADDS_exp12, RH, RH, 3); PutR32_2(32_ASR_reg, RH, RH, 4);  
+          PutR32_2(32_ASR_imm5, RH, 0, RH + LSL(2 MOD C2,6) + LSL(2 DIV C2,12))
+        ELSIF s # 4 THEN PutMOVI(RH+1, s); PutR32_2(32_MUL_reg, RH, RH, RH+1);
+        END;
+        IF check THEN (*check array lengths*) incR;
+          PutMOVI(RH, (x.type.size +3) DIV 4); PutR32_2(32_CMP_reg, 0, RH-1, RH); Trap(GT, TrapCopyOV); DEC(RH)
+        END;
+        fixB(pc0, pc+4 - pc0)
+      END
+    ELSIF x.type.form = ORB.Record THEN PutMOVI(RH, x.type.size DIV 4)
+    ELSE ORS.Mark("inadmissible assignment, not implemented")
     END ;
+    incR;
+    PutLS(32_LDR_imm8_w, RH, y.r, 4); 
+    PutI12(32_SUBS_exp12, RH-1, RH-1, 1);  (*TODO : add setflags*)
+    PutLS(32_STR_imm8_w, RH, x.r, 4); 
+    PutB32(B, GT, -3 - 2);
     RH := 0
   END StoreStruct;
 
