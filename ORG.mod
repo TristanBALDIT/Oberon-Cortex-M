@@ -4,7 +4,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
      Procedural interface to Parser ORP; result in array "code".
      Procedure Close writes code-files*)
 
-  CONST WordSize* = 4;
+  CONST WordSize* = 4; dPC = 2;
     minR = 0; TR = 12; SP = 13; RA = 14; PC = 15;  (*dedicated registers*)
     TrapArray=1; TrapTypeGuard=2; TrapCopyOV=3; TrapNIL=4; TrapIllProc=5; TrapDivZero=6; TrapAssert=7;
     maxCode = 12000; maxStrx = 3500; maxTD = 160; maxSet = WordSize*8;
@@ -42,6 +42,8 @@ CONST
 
     16_NOP = BF00H;  
 
+    16_IT = BF00H;        (* IT{x{y{z}}} cond *)
+
     (* Opcodes - 32-bits *)
     
     32_ADDS_exp12 = F1100000H;  (* ADDS Rd, Rn, #imm12 *)
@@ -76,6 +78,8 @@ CONST
 
     32_VMOVA = EE100A10H;  (* VMOV Rt, Sn *)
     32_VMOVV = EE000A10H;  (* VMOV Sn, Rt *)
+    32_VCVTM = FEBF0A40H;  (* VCVTM Sd, Sm *)
+    32_VCVT_if_s = EEB80AC0H;  (* VCVT if Sd, Sm *)
 
     32_VADD = EE300A00H;   (* VADD Sd, Sn, Sm *)
     32_VSUB = EE300A40H;   (* VSUB Sd, Sn, Sm *)
@@ -151,8 +155,8 @@ CONST
     RegI   regno   off     -
     Cond  cond   Fchain  Tchain  *)
 
-  VAR pc*, varsize: INTEGER;   (*program counter, data index*)
-    tdx, strx: INTEGER;
+  VAR pc*, varx: INTEGER;   (*program counter, data index*)
+    tdw, strx: INTEGER;
     entry: INTEGER;   (*main entry point*)
     RH: INTEGER;  (*available registers R[0] ... R[H-1]*)
     frame: INTEGER;  (*frame offset changed in SaveRegs and RestoreRegs*)
@@ -386,7 +390,7 @@ CONST
   BEGIN 
     i := ORS.Pos();
     PutMOVI(TR, i);
-    offset := (7 - num - (pc + 2));
+    offset := (7 - num - pc - dPC);
     IF (offset < -128) OR (offset > 127) THEN
       PutB32(32_B_cond_imm21, cond, offset);
     ELSE
@@ -434,7 +438,7 @@ CONST
   PROCEDURE fixB(at, with: INTEGER);
     VAR imm, ins: INTEGER;
   BEGIN
-    imm = with - 2;  (*PC is already advanced by 2 when the branch is executed*)
+    imm = with - dPC;  (*PC is already advanced by 2 when the branch is executed*)
     ins := GetIns(at);
     PutAt(ins + ((imm DIV 20) MOD 2 - (ins DIV 10) MOD 2) * C10 + imm MOD C6 - ins MOD C6  , at)
     ins := GetIns(at+1);
@@ -513,7 +517,7 @@ CONST
         IF x.type.form = ORB.Proc THEN
           IF x.r > 0 THEN (*local*) ORS.Mark("not allowed")
           ELSIF x.r = 0 THEN (*global*) 
-            c := pc - x.a DIV 2 + 2;
+            c := pc - x.a DIV 2 + dPC;
             IF c >= C8 THEN
               c_low := c MOD C8;
               i := GetMSB(c_low);
@@ -547,7 +551,7 @@ CONST
       ELSIF x.mode = RegI THEN PutLS(op, x.r, x.r, x.a)
       ELSIF x.mode = Cond THEN 
         PutB(B, negated(x.r), 3 - dPC); 
-        FixLink(x.b); PutI8(16_MOV_imm8, RH, 1); PutB16(16_B_cond_imm8, AL, 0);
+        FixLink(x.b); PutI8(16_MOV_imm8, RH, 1); PutB16(16_B_cond_imm8, AL, 2 - dPC);
         FixLink(x.a); PutI8(16_MOV_imm8, RH, 0); x.r = RH; incR
       END ;
   END load;
@@ -1033,8 +1037,8 @@ CONST
     IF y.type.form = ORB.String THEN loadStringAdr(y) ELSE loadAdr(y) END ;
     PutLS(32_LDRB_imm8_w, RH, x.r, 1); incR;
     PutLS(32_LDRB_imm8_w, RH, y.r, 1); incR;
-    PutR32_2(32_CMP_reg, 0, RH-2, RH-1); PutB32(32_B_cond_imm21, NE, 3 - 2);  (*check offset*)
-    PutI12(32_CMP_exp12, 0, RH-2, 0); PutB32(32_B_cond_imm21, NE, - 5 - 2);
+    PutR32_2(32_CMP_reg, 0, RH-2, RH-1); PutB32(32_B_cond_imm21, NE, 3 - dPC);  (*check offset*)
+    PutI12(32_CMP_exp12, 0, RH-2, 0); PutB32(32_B_cond_imm21, NE, - 5 - dPC);  
     DEC(RH, 4); SetCC(x, relmap[op - ORS.eql])
   END StringRelation;
 
@@ -1103,7 +1107,7 @@ CONST
     PutLS(32_LDR_imm8_w, RH, y.r, 4); 
     PutI12(32_SUBS_exp12, RH-1, RH-1, 1);  (*TODO : add setflags*)
     PutLS(32_STR_imm8_w, RH, x.r, 4); 
-    PutB32(B, GT, -3 - 2);
+    PutB32(B, GT, -3 - dPC);
     RH := 0
   END StoreStruct;
 
@@ -1120,7 +1124,7 @@ CONST
     PutLS(32_LDR_imm8_w, RH, y.r, 4); 
     PutLS(32_STR_imm8_w, RH, x.r, 4);
     PutR32_2(32_ASRS_imm5, RH, 0, RH + LSL(24 MOD C2,6) + LSL(24 DIV C2,12));
-    PutB32(B, NE,  -3 - 2);  RH := 0
+    PutB32(B, NE,  -3 - dPC);  RH := 0
    END CopyString;
   
   (* Code generation for parameters *)
@@ -1212,11 +1216,11 @@ CONST
   END CFJump;
 
   PROCEDURE BJump*(L: INTEGER);
-  BEGIN PutB32(32_B_cond_imm21, AL, L-pc-2)
+  BEGIN PutB32(32_B_cond_imm21, AL, L-pc-dPC)
   END BJump;
 
   PROCEDURE CBJump*(VAR x: Item; L: INTEGER);
-  BEGIN loadCond(x); PutB32(32_B_cond_imm21, negated(x.r), L-pc-2); FixLink(x.b); FixLinkWith(x.a, L)
+  BEGIN loadCond(x); PutB32(32_B_cond_imm21, negated(x.r), L-pc-dPC); FixLink(x.b); FixLinkWith(x.a, L)
   END CBJump;
 
   PROCEDURE Fixup*(VAR x: Item);
@@ -1245,7 +1249,7 @@ CONST
   PROCEDURE Call*(VAR x: Item; r: INTEGER);
   BEGIN (*x.type.form = ORB.Proc*)
     IF x.mode = ORB.Const THEN
-      IF x.r >= 0 THEN PutB32(32_BL, AL, (x.a DIV 4)-pc-1)
+      IF x.r >= 0 THEN PutB32(32_BL, AL, (x.a DIV 4)-pc-dPC)
       ELSE (*imported*) fixcode(x.r, x.a);
       END
     ELSE (*installed procedure*)
@@ -1369,22 +1373,31 @@ CONST
     IF z.mode = ORB.Const THEN
       IF z.a > 0 THEN load(z) ELSE ORS.Mark("bad count") END
     ELSE load(z);
-      IF check THEN Trap(LT, 3) END ;
-      Put3(BC, EQ, 6)
+      PutI12(32_CMP_exp12, 0, z.r, 0);
+      IF check THEN Trap(LT, TrapCopyOV) END ;
+      PutB32(32_B_cond_imm21, NE, 5-dPC); 
     END ;
-    Put2(Ldr, RH, x.r, 0); Put1(Add, x.r, x.r, 4);
-    Put2(Str, RH, y.r, 0); Put1(Add, y.r, y.r, 4);
-    Put1(Sub, z.r, z.r, 1); Put3(BC, NE, -6); DEC(RH, 3)
+    PutLS(32_LDR_imm8_w, RH, x.r, 4); 
+    PutI(32_SUBS_imm8, z.r, z.r, 1); 
+    PutLS(32_STR_imm8_w, RH, y.r, 4); 
+    PutB32(32_B_cond_imm21, EQ, -3-dPC); DEC(RH, 3);
   END Copy;
 
+  (* TODO *)
   PROCEDURE LDPSR*(VAR x: Item);
-  BEGIN (*x.mode = Const*)  Put3(0, 15, x.a + 20H)
+  BEGIN (*x.mode = Const*)  ORS.Mark("not implemented")
   END LDPSR;
 
   PROCEDURE LDREG*(VAR x, y: Item);
   BEGIN
-    IF y.mode = ORB.Const THEN Put1a(Mov, x.a, 0, y.a)
-    ELSE load(y); Put0(Mov, x.a, 0, y.r); DEC(RH)
+    IF x.a = 15 THEN x.a := RA
+    ELSIF x.a = 14 THEN x.a := SP
+    ELSIF x.a = 13 THEN x.a := TR
+    ELSIF x.a = < 0 THEN x.a := -x.a
+    ELSE INC(x.a, minR)
+    END ;
+    IF y.mode = ORB.Const THEN PutMOVI(x.a, y.a)
+    ELSE load(y); PutR(32_MOV_reg, x.a, 0, y.r); DEC(RH)
     END
   END LDREG;
 
@@ -1394,75 +1407,92 @@ CONST
   BEGIN
     IF x.mode = ORB.Const THEN x.a := ABS(x.a)
     ELSE load(x);
-      IF x.type.form = ORB.Real THEN Put1(Lsl, x.r, x.r, 1); Put1(Ror, x.r, x.r, 1)
-      ELSE Put1(Cmp, x.r, x.r, 0); Put3(BC, GE, 2); Put1(Mov, RH, 0, 0); Put0(Sub, x.r, RH, x.r)
+      IF x.type.form = ORB.Real THEN loadf(x); PutR32_2(32_VABS, x.r, 0, x.r)
+      ELSE load(x); PutI12(32_CMP_exp12, 0, x.r, 0); PutIns(16_IT + VS * C4 + 8H); PutI12(32_RSB_exp12, x.r, x.r, 0);
       END
     END
   END Abs;
 
   PROCEDURE Odd*(VAR x: Item);
-  BEGIN load(x); Put1(And, x.r, x.r, 1); SetCC(x, NE); DEC(RH)
+  BEGIN load(x); PutI12(32_ANDS_exp12, x.r, x.r, 1); SetCC(x, NE); DEC(RH)
   END Odd;
 
   PROCEDURE Floor*(VAR x: Item);
-  BEGIN load(x); Put1(Mov+U, RH, 0, 4B00H); Put0(Fad+V, x.r, x.r, RH)
+  BEGIN loadf(x); PutR32_1(32_VCVTM, x.r, 0, x.r); PutR32_1(VMOVA, x.r, x.r, 0)
   END Floor;
 
   PROCEDURE Float*(VAR x: Item);
-  BEGIN load(x); Put1(Mov+U, RH, 0, 4B00H);  Put0(Fad+U, x.r, x.r, RH)
+  BEGIN loadf(x); PutR32_1(32_VMOVV, x.r, 0, x.r); PutR32_1(32_VCVT_if_s, x.r, 0, x.r)
   END Float;
 
+  (*TODO check if modif are usefull*)
   PROCEDURE Ord*(VAR x: Item);
   BEGIN
-    IF x.mode IN {ORB.Var, ORB.Par, RegI, Cond} THEN load(x) END
+    IF x.mode IN {ORB.Var, ORB.Par, RegI, Cond} THEN load(x);
+      IF (x.type.form = ORB.Pointer) OR (x.type.base.form = ORB.Array) THEN PutI12(32_AND_exp12, x.r, x.r, 16) END
+    ELSIF (x.mode = Reg) & (x.type = ORB.realType) THEN PutR32_1(32_VMOVA, x.r, 0, x.r)
+    END
   END Ord;
 
+  (*TODO check if modif are usefull*)
   PROCEDURE Len*(VAR x: Item);
   BEGIN
     IF x.type.len >= 0 THEN
       IF x.mode = RegI THEN DEC(RH) END ;
       x.mode := ORB.Const; x.a := x.type.len
-    ELSE (*open array*) Put2(Ldr, RH, SP, x.a + 4 + frame); x.mode := Reg; x.r := RH; incR
+    ELSIF x.type.size > 0 THEN (*open array param*) 
+      PutLS(32_LDR_imm8_i, RH, SP, x.a + 4 + frame); x.mode := Reg; x.r := RH; incR
+    ELSE (*dynamic open array*) PutLS(32_LDR_imm8_i, RH, x.r, -16); x.mode := Reg;
     END 
   END Len;
 
   PROCEDURE Shift*(fct: INTEGER; VAR x, y: Item);
-    VAR op: INTEGER;
+    VAR op, op2: INTEGER;
   BEGIN load(x);
-    IF fct = 0 THEN op := Lsl ELSIF fct = 1 THEN op := Asr ELSE op := Ror END ;
-    IF y.mode = ORB.Const THEN Put1(op, x.r, x.r, y.a MOD 20H)
-    ELSE load(y); Put0(op, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
+    IF fct = 0 THEN op := 32_LSL_imm5; op2 := 32_LSL_reg
+    ELSIF fct = 1 THEN op := 32_ASR_imm5; op2 := 32_ASR_reg
+    ELSE op := 32_ROR_imm5; op2 := 32_ROR_reg
+    END ;
+    IF y.mode = ORB.Const THEN IF y.a#0 THEN PutR32_2(op, x.r, 0, x.r + LSL(y.a MOD C2,6) + LSL((y.a DIV C2) MOD C5,12))
+    ELSE load(y); PutR32_2(op2, RH-2, x.r, y.r); DEC(RH); x.r := RH-1
     END
   END Shift;
 
   PROCEDURE ADC*(VAR x, y: Item);
-  BEGIN load(x); load(y); Put0(Add+2000H, x.r, x.r, y.r); DEC(RH)
+  BEGIN load(x); load(y); PutR32_2(32_ADC_reg, x.r, x.r, y.r); DEC(RH)
   END ADC;
 
   PROCEDURE SBC*(VAR x, y: Item);
-  BEGIN load(x); load(y); Put0(Sub+2000H, x.r, x.r, y.r); DEC(RH)
+  BEGIN load(x); load(y); PutR32_2(32_SBC_reg, x.r, x.r, y.r); DEC(RH)
   END SBC;
 
   PROCEDURE UML*(VAR x, y: Item);
-  BEGIN load(x); load(y); Put0(Mul+2000H, x.r, x.r, y.r); DEC(RH)
+  BEGIN load(x); load(y); PutMUL(32_UMUL_reg, 0, x.r, y.r, x.r); DEC(RH)
   END UML;
 
   PROCEDURE Bit*(VAR x, y: Item);
-  BEGIN load(x); Put2(Ldr, x.r, x.r, 0);
-    IF y.mode = ORB.Const THEN Put1(Ror, x.r, x.r, y.a+1); DEC(RH)
-    ELSE load(y); Put1(Add, y.r, y.r, 1); Put0(Ror, x.r, x.r, y.r); DEC(RH, 2)
+  BEGIN load(x); PutLS(32_LDR_imm8_i, x.r, x.r, 0);
+    IF y.mode = ORB.Const THEN PutR32_2(32_RORS_imm5, x.r, 0, x.r + LSL(y.a+1, 7)); DEC(RH)
+    ELSE load(y); PutI12(32_ADD_exp12, y.r, y.r, 1); PutR32_2(32_RORS_reg, x.r, y.r, x.r); DEC(RH, 2)
     END ;
     SetCC(x, MI)
   END Bit;
 
   PROCEDURE Register*(VAR x: Item);
   BEGIN (*x.mode = Const*)
-    Put0(Mov, RH, 0, x.a MOD 10H); x.mode := Reg; x.r := RH; incR
+    IF x.a = 15 THEN x.a := RA
+    ELSIF x.a = 14 THEN x.a := SP
+    ELSIF x.a = 13 THEN x.a := TR
+    ELSIF x.a = < 0 THEN x.a := -x.a
+    ELSE INC(x.a, minR)
+    END ;
+    PutMOV16(RH, x.a MOD C4); x.mode := Reg; x.r := RH; incR
   END Register;
 
+  (*TODO*)
   PROCEDURE H*(VAR x: Item);
   BEGIN (*x.mode = Const*)
-    Put0(Mov + U + x.a MOD 2 * V, RH, 0, 0); x.mode := Reg; x.r := RH; incR
+    ORS.Mark("not implemented")
   END H;
 
   PROCEDURE Adr*(VAR x: Item);
@@ -1479,29 +1509,28 @@ CONST
   END Condition;
 
   PROCEDURE Open*(v: INTEGER);
-  BEGIN pc := 0; tdx := 0; strx := 0; RH := 0; fixorgP := 0; fixorgD := 0; fixorgT := 0; check := v # 0; version := v;
-    IF v = 0 THEN pc := 1;
-      REPEAT code[pc] := 0; INC(pc) UNTIL pc = 8
+    VAR i : INTEGER;
+  BEGIN pc := 0; final := -1; tdw := 0; strx := 0; RH := 0, ; check := v # 0;
+      fixorgP := 0; fixorgD := 0; fixorgT := 0; fixorgM := 0;
+      FOR i := 0 TO 6 DO PutI32(32_ADD_exp12, TR, TR, 10000H, 32_ADD_reg) END ;
+      fixcode(-0FFH, 0FFH);
     END
   END Open;
 
   PROCEDURE SetDataSize*(dc: INTEGER);
-  BEGIN varsize := dc
+  BEGIN varx := dc
   END SetDataSize;
 
   PROCEDURE Header*;
   BEGIN entry := pc*4;
-    IF version = 0 THEN code[0] := 0E7000000H-1 + pc;  Put1a(Mov, SP, 0, StkOrg0)  (*RISC-0*)
-    ELSE Put1(Sub, SP, SP, 4); Put2(Str, LNK, SP, 0)
-    END
+    PutLS(32_STR_imm8_w, RA, SP, -4);
   END Header;
 
   PROCEDURE NofPtrs(typ: ORB.Type): INTEGER;
     VAR fld: ORB.Object; n: INTEGER;
   BEGIN
     IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN n := 1
-    ELSIF typ.form = ORB.Record THEN
-      fld := typ.dsc; n := 0;
+    ELSIF typ.form = ORB.Record THEN fld := typ.dsc; n := 0;
       WHILE fld # NIL DO n := NofPtrs(fld.type) + n; fld := fld.next END
     ELSIF typ.form = ORB.Array THEN n := NofPtrs(typ.base) * typ.len
     ELSE n := 0
@@ -1513,25 +1542,20 @@ CONST
     VAR fld: ORB.Object; i, s: INTEGER;
   BEGIN
     IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN Files.WriteInt(R, adr)
-    ELSIF typ.form = ORB.Record THEN
-      fld := typ.dsc;
+    ELSIF typ.form = ORB.Record THEN fld := typ.dsc;
       WHILE fld # NIL DO FindPtrs(R, fld.type, fld.val + adr); fld := fld.next END
-    ELSIF typ.form = ORB.Array THEN
-      s := typ.base.size;
+    ELSIF typ.form = ORB.Array THEN s := typ.base.size;
       FOR i := 0 TO typ.len-1 DO FindPtrs(R, typ.base, i*s + adr) END
     END
   END FindPtrs;
 
   PROCEDURE Close*(VAR modid: ORS.Ident; key, nofent: INTEGER);
     VAR obj: ORB.Object;
-      i, comsize, nofimps, nofptrs, size: INTEGER;
+      i, comsize, nofimps, nofptrs, size, tdw: INTEGER;
       name: ORS.Ident;
       F: Files.File; R: Files.Rider;
   BEGIN  (*exit code*)
-    IF version = 0 THEN Put1(Mov, 0, 0, 0); Put3(BR, 7, 0)  (*RISC-0*)
-    ELSE Put2(Ldr, LNK, SP, 0); Put1(Add, SP, SP, 4); Put3(BR, 7, LNK)
-    END ;
-    obj := ORB.topScope.next; nofimps := 0; comsize := 4; nofptrs := 0;
+    obj := ORB.topScope.next; nofimps := 0; comsize := 4; nofptrs := 0; tdw := varx + strx;
     WHILE obj # NIL DO
       IF (obj.class = ORB.Mod) & (obj.dsc # ORB.system) THEN INC(nofimps) (*count imports*)
       ELSIF (obj.exno # 0) & (obj.class = ORB.Const) & (obj.type.form = ORB.Proc)
@@ -1539,12 +1563,16 @@ CONST
         WHILE obj.name[i] # 0X DO INC(i) END ;
         i := (i+4) DIV 4 * 4; INC(comsize, i+4)
       ELSIF obj.class = ORB.Var THEN INC(nofptrs, NofPtrs(obj.type))  (*count pointers*)
+      ELSIF (obj.class = ORB.Typ) & (obj.type.form = ORB.Record) & (obj.type.typobj = obj) THEN (*build type descriptors*)
+        fix := obj.type.len; (*heading o fixup chain of instructions pairs inserted into fixorgD chain in loadTypTagAdr*)
+        BuildTD(obj.type, tdw); (*obj.len.len now used as TD offset in bytes relative to tdx*)
+        IF fix > 0 THEN FixLinkPair(fix, tdx + obj.type.len) END (*fix chain of instructions pairs with TD adr*)
       END ;
       obj := obj.next
     END ;
-    size := varsize + strx + comsize + (pc + nofimps + nofent + nofptrs + 1)*4;  (*varsize includes type descriptors*)
+    size := tdx + tdw*4 + comsize + (pc + nofimps + nofent + nofptrs + 2)*4;  (*varsize includes type descriptors*)
     
-    ORB.MakeFileName(name, modid, ".rsc"); (*write code file*)
+    ORB.MakeFileName(name, modid, appendix); (*write code file*)
     F := Files.New(name); Files.Set(R, F, 0); Files.WriteString(R, modid); Files.WriteInt(R, key); Files.Write(R, CHR(version));
     Files.WriteInt(R, size);
     obj := ORB.topScope.next;
@@ -1553,14 +1581,13 @@ CONST
       obj := obj.next
     END ;
     Files.Write(R, 0X);
-    Files.WriteInt(R, tdx*4);
-    i := 0;
-    WHILE i < tdx DO Files.WriteInt(R, data[i]); INC(i) END ; (*type descriptors*)
-    Files.WriteInt(R, varsize - tdx*4);  (*data*)
+    Files.WriteInt(R, varx);  (*variable space*)
     Files.WriteInt(R, strx);
     FOR i := 0 TO strx-1 DO Files.Write(R, str[i]) END ;  (*strings*)
-    Files.WriteInt(R, pc);  (*code len*)
-    FOR i := 0 TO pc-1 DO Files.WriteInt(R, code[i]) END ;  (*program*)
+    Files.WriteInt(R, tdw*4);  (*code len*)
+    FOR i := 0 TO tdw-1 DO Files.WriteInt(R, td[i]); INC(i) END ; (*type descriptors*)
+    Files.WriteInt(R, pc);
+    FOR i := 0 TO pc-1 DO Files.WriteInt(R, GetIns(i)) END ;  (*program*)
     obj := ORB.topScope.next;
     WHILE obj # NIL DO  (*commands*)
       IF (obj.exno # 0) & (obj.class = ORB.Const) & (obj.type.form = ORB.Proc) &
@@ -1574,13 +1601,16 @@ CONST
     obj := ORB.topScope.next;
     WHILE obj # NIL DO  (*entries*)
       IF obj.exno # 0 THEN
-        IF (obj.class = ORB.Const) & (obj.type.form = ORB.Proc) OR (obj.class = ORB.Var) THEN
-          Files.WriteInt(R, obj.val);
-        ELSIF obj.class = ORB.Typ THEN
-          IF obj.type.form = ORB.Record THEN Files.WriteInt(R,  obj.type.len MOD 10000H)
-          ELSIF (obj.type.form = ORB.Pointer) & ((obj.type.base.typobj = NIL) OR (obj.type.base.typobj.exno = 0)) THEN
-            Files.WriteInt(R,  obj.type.base.len MOD 10000H)
+        IF obj.class = ORB.Const THEN
+          IF obj.type.form = ORB.String THEN Files.WriteInt(R, varx + obj.val MOD C20); 
+          ELSIF obj.type.form = ORB.Proc THEN Files.WriteInt(R, obj.val)
           END
+        ELSIF obj.class = ORB.Typ THEN
+          IF obj.type.form = ORB.Record THEN Files.WriteInt(R,  tdx + obj.type.len MOD C16)
+          ELSIF (obj.type.form = ORB.Pointer) & ((obj.type.base.typobj = NIL) OR (obj.type.base.typobj.exno = 0)) THEN
+            Files.WriteInt(R,  tdx + obj.type.base.len MOD C16)
+          END
+        ELSIF obj.class = ORB.Var THEN Files.WriteInt(R, obj.val)
         END
       END ;
       obj := obj.next
@@ -1591,9 +1621,10 @@ CONST
       obj := obj.next
     END ;
     Files.WriteInt(R, -1);
-    Files.WriteInt(R, fixorgP); Files.WriteInt(R, fixorgD); Files.WriteInt(R, fixorgT); Files.WriteInt(R, entry);
+    Files.WriteInt(R, fixorgP*2); Files.WriteInt(R, fixorgD*2); Files.WriteInt(R, fixorgT); Files.WriteInt(R, fixorgM); 
+    Files.WriteInt(R, entry); Files.WriteInt(R, final);
     Files.Write(R, "O"); Files.Register(F)
   END Close;
 
-BEGIN relmap[0] := 1; relmap[1] := 9; relmap[2] := 5; relmap[3] := 6; relmap[4] := 14; relmap[5] := 13;
+BEGIN relmap[0] := EQ; relmap[1] := NE; relmap[2] := LT; relmap[3] := LE; relmap[4] := GT; relmap[5] := GE;
 END ORG.
