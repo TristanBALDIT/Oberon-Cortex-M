@@ -1,0 +1,8 @@
+# Ignore compiled and generated files
+*.ll
+*.elf
+*.smb
+*.arm
+
+# Ignore build directory
+.obnc/
