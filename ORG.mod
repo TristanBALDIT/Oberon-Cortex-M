@@ -76,7 +76,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     i32_BL_imm25 = 0F000D000H;   (* BL label *)
 
     i32_MOV_exp12 = 0F04F0000H;   (* MOV Rd, #const *)
-    i32_MOVS_exp12 = 0F04F0000H;   (* MOVS Rd, #const *)
+    i32_MOVS_exp12 = 0F05F0000H;   (* MOVS Rd, #const *)
     i32_MOV_reg = 0EA4F0000H;     (* MOV Rd, Rm *)
     i32_MVN_exp12 = 0F06F0000H;   (* MVN Rd, #const *)
     i32_MVN_reg = 0E26F0000H;     (* MVN Rd, Rm *)
@@ -227,14 +227,14 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   PROCEDURE PutAt(ins, adr: INTEGER);
     VAR current: INTEGER;
   BEGIN
-    ins := ins MOD 10000H;
+    ins := ins MOD C16;
     current := code[adr DIV 2];
     IF adr MOD 2 = 0 THEN
       (* On veut modifier les 16 bits de POIDS FAIBLE *)
-      code[adr DIV 2] := (current DIV 10000H * 10000H) + ins;
+      code[adr DIV 2] := ((current DIV C16) * C16) + ins;
     ELSE
       (* On veut modifier les 16 bits de POIDS FORT *)
-      code[adr DIV 2] := (current MOD 10000H) + (ins * 10000H);
+      code[adr DIV 2] := (current MOD C16) + (ins * C16);
     END;
   END PutAt;
 
@@ -342,25 +342,51 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE PutI12(op, rd, rn, imm12: INTEGER);
   BEGIN
-    PutIns(op DIV C16 + imm12 DIV C12 * C10 + rn);
+    PutIns(op DIV C16 + ((imm12 DIV C11) MOD 2) * C10 + rn);
     PutIns(op MOD C16 + (imm12 DIV C8) MOD 8 * C12 + rd * C8 + imm12 MOD C8)
   END PutI12;
 
   PROCEDURE PutI16(op, rd, imm16: INTEGER);
   BEGIN
-    PutIns(op DIV C16 + ((imm16 DIV C11) MOD 2) * C10 + imm16 DIV C12);
-    PutIns(op MOD C16 + (imm16 DIV C8) MOD 8 * C12 + rd * C8 + imm16 MOD C8)
+    PutIns(op DIV C16 + ((imm16 DIV C15) MOD 2) * C10 + imm16 DIV C12 MOD C4);
+    PutIns(op MOD C16 + (imm16 DIV C8) MOD C3 * C12 + rd * C8 + imm16 MOD C8)
   END PutI16;
 
-  PROCEDURE DecomposeConst(const : INTEGER; VAR imm: INTEGER): BOOLEAN;
-    VAR rot: INTEGER; ret: BOOLEAN;
+  PROCEDURE IntToStr(n: INTEGER; VAR s: ARRAY OF CHAR);
+    VAR i, j: INTEGER; neg: BOOLEAN; buf: ARRAY 16 OF CHAR;
   BEGIN
-    imm := const; rot := 0;
-    WHILE (rot<31) & ((imm < 0) OR (imm > 255)) DO 
-      imm := ROR(imm, 31); INC(rot) 
+    neg := n < 0; IF neg THEN n := -n END;
+    IF n = 0 THEN buf[0] := 30X; i := 1  (* 30X = '0' *)
+    ELSE
+      i := 0;
+      WHILE n > 0 DO
+        buf[i] := CHR(ORD(30X) + n MOD 10);  (* 30X = '0' *)
+        n := n DIV 10; INC(i)
+      END
     END;
-    ret := (imm >= 0) & (imm <= 255);
-    imm := (imm - 128) + rot * C7;
+    IF neg THEN buf[i] := 2DX; INC(i) END;  (* 2DX = '-' *)
+    buf[i] := 0X;
+    (* Reverse the string *)
+    j := 0;
+    WHILE i > 0 DO DEC(i); s[j] := buf[i]; INC(j) END;
+    s[j] := 0X
+  END IntToStr;
+
+  PROCEDURE DecomposeConst(const : INTEGER; VAR imm: INTEGER): BOOLEAN;
+    VAR rot: INTEGER; ret: BOOLEAN; msg: ARRAY 32 OF CHAR;
+  BEGIN
+    imm := const; rot := 0; ret := TRUE;
+    IF ((imm < 0) OR (imm > 255)) THEN
+      rot := 8;
+      imm := ROR(imm, 32 - 8);
+      WHILE (rot<32) & ((imm < 128) OR (imm > 255)) DO 
+        imm := ROR(imm, 31); INC(rot) 
+      END;
+      ret := (imm >= 128) & (imm <= 255);
+      imm := imm MOD C7 + rot * C7;
+      IntToStr(imm, msg);
+      ORS.Raise(msg);
+    END;
     RETURN ret
   END DecomposeConst;
 
@@ -394,15 +420,15 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       INC(op, 200H);
       IF off >= C16 THEN ORS.Raise("PutLS offset too big") END;
       IF off >= C8 THEN
-        off_high := off DIV C8;
-        i := GetMSB(off_high);
-        j := LSL(off_high, 7-i) MOD C7 + (24 + 7 - i)* C7;
-        PutI12(i32_ADD_exp12, RH, rn, j);
-        rn := RH
+      off_high := off DIV C8;
+      i := GetMSB(off_high);
+      j := LSL(off_high, 7-i) MOD C7 + (24 + 7 - i)* C7;
+      PutI12(i32_ADD_exp12, RH, rn, j);
+      rn := RH
       END;
-      PutIns(op DIV C16 + rn);
-      PutIns(op MOD C16 + off MOD C8 + rt * C12)
-    END
+    END;
+    PutIns(op DIV C16 + rn);
+    PutIns(op MOD C16 + off MOD C8 + rt * C12)
   END PutLS;
 
 
@@ -1694,9 +1720,16 @@ BEGIN relmap[0] := EQ; relmap[1] := NE; relmap[2] := LT; relmap[3] := LE; relmap
 
   (* Test: write a simple instruction and create file *)
   Open(0);
+  PutR32_2(i32_ADD_reg, 1, 2, 3);  (* Add 1 to R0 *)
   PutMOVI(0, 42);  (* Move immediate value 42 to register R0 *)
-  PutB32(i32_B_cond_imm21, NE, 0); 
+  PutMOVI(0, 256);  (* Move immediate value 42 to register R0 *)
+  PutR32_2(i32_SUB_reg, 1, 2, 3);  (* Subtract 1 from R0 *)
+  PutR32_2(i32_RORS_reg, 1, 2, 3);  (* RORS *)
+  PutB32(i32_B_cond_imm21, NE, 0);
   fixB(pc-2, 4);
+  PutR32_2(i32_ADD_reg, 1, 2, 3); 
+  PutIns(1234H);
+  PutLS(i32_STR_imm8_w, 0, SP, -4);
   modid := "Test";
   Close(modid, 0, 0)
 

@@ -88,6 +88,7 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07*)
     VAR position: INTEGER;
   BEGIN
     position := Pos();
+    error(message);
     IF (position > errpos) & (errcnt < 25) THEN
       error(message)
     END;
