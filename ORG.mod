@@ -87,7 +87,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     i32_VMOVA = 0EE100A10H;  (* VMOV Rt, Sn *)
     i32_VMOVV = 0EE000A10H;  (* VMOV Sn, Rt *)
     i32_VCVTM = 0FEBF0A40H;  (* VCVTM Sd, Sm *)
-    i32_VCVT_if_s = 0EEB80AC0H;  (* VCVT if Sd, Sm *)
+    i32_VCVT_if_s = 0EEB80AC0H;  (* VCVT F32 S32 Sd, Sm *)
 
     i32_VADD = 0EE300A00H;   (* VADD Sd, Sn, Sm *)
     i32_VSUB = 0EE300A40H;   (* VSUB Sd, Sn, Sm *)
@@ -169,9 +169,11 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     TYPE Item* = RECORD
       mode*: INTEGER;
       type*: ORB.Type;
+      obj* : ORB.Object;
       a*, b*, r: INTEGER;
       rdo*: BOOLEAN  (*read only*)
     END ;
+    LabelRange* = RECORD low*, high*, label*: INTEGER END;
 
   (* Item forms and meaning of fields:
     mode    r      a       b
@@ -201,6 +203,26 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     litCount: INTEGER;
     modid: ORS.Ident;  (*for test*)
 
+  PROCEDURE IntToStr(n: INTEGER; VAR s: ARRAY OF CHAR);
+    VAR i, j: INTEGER; neg: BOOLEAN; buf: ARRAY 16 OF CHAR;
+  BEGIN
+    neg := n < 0; IF neg THEN n := -n END;
+    IF n = 0 THEN buf[0] := 30X; i := 1  (* 30X = '0' *)
+    ELSE
+      i := 0;
+      WHILE n > 0 DO
+        buf[i] := CHR(ORD(30X) + n MOD 10);  (* 30X = '0' *)
+        n := n DIV 10; INC(i)
+      END
+    END;
+    IF neg THEN buf[i] := 2DX; INC(i) END;  (* 2DX = '-' *)
+    buf[i] := 0X;
+    (* Reverse the string *)
+    j := 0;
+    WHILE i > 0 DO DEC(i); s[j] := buf[i]; INC(j) END;
+    s[j] := 0X
+  END IntToStr;
+
   (*instruction assemblers according to formats*)
 
   PROCEDURE incR;
@@ -225,16 +247,16 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END GetIns;
 
   PROCEDURE PutAt(ins, adr: INTEGER);
-    VAR current: INTEGER;
+    VAR current, i: INTEGER;
   BEGIN
-    ins := ins MOD C16;
+    i := ins MOD C16;
     current := code[adr DIV 2];
     IF adr MOD 2 = 0 THEN
       (* On veut modifier les 16 bits de POIDS FAIBLE *)
-      code[adr DIV 2] := ((current DIV C16) * C16) + ins;
+      code[adr DIV 2] := ((current DIV C16) * C16) + i;
     ELSE
       (* On veut modifier les 16 bits de POIDS FORT *)
-      code[adr DIV 2] := (current MOD C16) + (ins * C16);
+      code[adr DIV 2] := (current MOD C16) + ROR(i, 16);
     END;
   END PutAt;
 
@@ -331,7 +353,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     VAR d: INTEGER;
   BEGIN
     IF rd > 7 THEN d := 1; rd := rd - 8  ELSE d := 0 END;  
-    PutIns(i16_MOV_reg + d * C7 + rm * C3 + rd)
+    PutIns(i16_MOV_reg + d * C7 + rm * C3 + rd MOD C3)
   END PutMOV16;
 
   PROCEDURE PutMUL(op, rd, rn, rm, ra: INTEGER);
@@ -352,26 +374,6 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     PutIns(op MOD C16 + (imm16 DIV C8) MOD C3 * C12 + rd * C8 + imm16 MOD C8)
   END PutI16;
 
-  PROCEDURE IntToStr(n: INTEGER; VAR s: ARRAY OF CHAR);
-    VAR i, j: INTEGER; neg: BOOLEAN; buf: ARRAY 16 OF CHAR;
-  BEGIN
-    neg := n < 0; IF neg THEN n := -n END;
-    IF n = 0 THEN buf[0] := 30X; i := 1  (* 30X = '0' *)
-    ELSE
-      i := 0;
-      WHILE n > 0 DO
-        buf[i] := CHR(ORD(30X) + n MOD 10);  (* 30X = '0' *)
-        n := n DIV 10; INC(i)
-      END
-    END;
-    IF neg THEN buf[i] := 2DX; INC(i) END;  (* 2DX = '-' *)
-    buf[i] := 0X;
-    (* Reverse the string *)
-    j := 0;
-    WHILE i > 0 DO DEC(i); s[j] := buf[i]; INC(j) END;
-    s[j] := 0X
-  END IntToStr;
-
   PROCEDURE DecomposeConst(const : INTEGER; VAR imm: INTEGER): BOOLEAN;
     VAR rot: INTEGER; ret: BOOLEAN; msg: ARRAY 32 OF CHAR;
   BEGIN
@@ -384,8 +386,6 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       END;
       ret := (imm >= 128) & (imm <= 255);
       imm := imm MOD C7 + rot * C7;
-      IntToStr(imm, msg);
-      ORS.Raise(msg);
     END;
     RETURN ret
   END DecomposeConst;
@@ -732,7 +732,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END MakeStringItem;
 
   PROCEDURE MakeItem*(VAR x: Item; y: ORB.Object; curlev: INTEGER);
-  BEGIN x.mode := y.class; x.type := y.type; x.a := y.val; x.rdo := y.rdo;
+  BEGIN x.mode := y.class; x.type := y.type; x.a := y.val; x.rdo := y.rdo; x.obj := y;
     IF y.class = ORB.Par THEN x.b := 0
     ELSIF (y.class = ORB.Const) & (y.type.form = ORB.String) THEN x.b := y.lev;
     ELSE x.r := y.lev
@@ -1023,10 +1023,10 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE RealOp*(op: INTEGER; VAR x, y: Item);   (* x := x op y *)
   BEGIN loadf(x); loadf(y);
-    IF op = ORS.plus THEN PutR32_1(i32_VADD, RH-2, x.r, y.r)
-    ELSIF op = ORS.minus THEN PutR32_1(i32_VSUB, RH-2, x.r, y.r)
-    ELSIF op = ORS.times THEN PutR32_1(i32_VMUL, RH-2, x.r, y.r)
-    ELSIF op = ORS.rdiv THEN PutR32_1(i32_VDIV, RH-2, x.r, y.r)
+    IF op = ORS.plus THEN PutR32_1(i32_VADD, x.r , RH-2, y.r)
+    ELSIF op = ORS.minus THEN PutR32_1(i32_VSUB, x.r , RH-2, y.r)
+    ELSIF op = ORS.times THEN PutR32_1(i32_VMUL, x.r , RH-2, y.r)
+    ELSIF op = ORS.rdiv THEN PutR32_1(i32_VDIV, x.r , RH-2, y.r)
     END ;
     DEC(RH); x.r := RH-1
   END RealOp;
@@ -1383,6 +1383,31 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     RH := minR
   END Return;
 
+    (* Case Statements *)
+
+  PROCEDURE CaseHead*(VAR x: Item; VAR L0: INTEGER);
+  BEGIN load(x);  (*value of case expression*)
+    L0 := pc; PutI8(i16_CMP_imm8, x.r, 0);  (*higher bound, fixed up in CaseTail*)
+    PutB32(i32_B_cond_imm21, HI, 0);  (* unsigned higher; branch to else, fixed up in CaseTail*)
+    PutI12(i32_ADD_exp12, RH, x.r, 0);  (*nof words between BL instruction at L0+4 and jump table, fixed up in CaseTail*)
+    PutR32_2(i32_ADD_reg, PC, PC, RH + LSL( 2, 6));
+    DEC(RH)
+  END CaseHead;
+
+  PROCEDURE CaseTail*(L0, L1: INTEGER; n: INTEGER; VAR tab: ARRAY OF LabelRange);  (*L1 = label for else*)
+    VAR i, j: INTEGER;
+  BEGIN
+    IF n > 0 THEN fixI(L0, tab[n-1].high ) (*higher bound*) ELSIF L1 = 0 THEN ORS.Raise("empty case") END ;
+    IF L1 = 0 THEN L1 := pc; Trap(AL, TrapArray) END ;  (*create else*)
+    fixB(L0+1, L1-L0 - 1);  (*branch to else*)
+    fixI(L0+2, pc-L0 - 3 - dPC);  (*nof words between ADD PC instruction at L0+4 and jump table*)
+    j := 0;
+    FOR i := 0 TO n-1 DO  (*construct jump table*)
+      WHILE j < tab[i].low DO BJump(L1); INC(j) END ;  (*else*)
+      WHILE j <= tab[i].high DO BJump(tab[i].label); INC(j) END
+    END
+  END CaseTail;
+
   (* In-line code procedures*)
 
   PROCEDURE Increment*(upordown: INTEGER; VAR x, y: Item);
@@ -1508,11 +1533,11 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END Odd;
 
   PROCEDURE Floor*(VAR x: Item);
-  BEGIN loadf(x); PutR32_1(i32_VCVTM, x.r, 0, x.r); PutR32_1(i32_VMOVA, x.r, x.r, 0)
+  BEGIN loadf(x); PutR32_1(i32_VCVTM, 0, x.r, x.r); PutR32_1(i32_VMOVA, x.r, x.r, 0)
   END Floor;
 
   PROCEDURE Float*(VAR x: Item);
-  BEGIN loadf(x); PutR32_1(i32_VMOVV, x.r, 0, x.r); PutR32_1(i32_VCVT_if_s, x.r, 0, x.r)
+  BEGIN loadf(x); PutR32_1(i32_VMOVV, x.r, 0, x.r); PutR32_1(i32_VCVT_if_s, 0, x.r, x.r)
   END Float;
 
   (*TODO check if modif are usefull*)
@@ -1576,6 +1601,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     ELSIF x.a <= 0 THEN x.a := -x.a
     ELSE INC(x.a, minR)
     END ;
+    (* TODO CHECK REG ORDER *)
     PutMOV16(RH, x.a MOD C4); x.mode := Reg; x.r := RH; incR
   END Register;
 
@@ -1643,6 +1669,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       i, comsize, nofimps, nofptrs, size, tdx, fix: INTEGER;
       name: ORS.Ident;
       F: Files.File; R: Files.Rider;
+      msg: ARRAY 32 OF CHAR;
   BEGIN  (*exit code*)
     obj := ORB.topScope.next; nofimps := 0; comsize := 4; nofptrs := 0; tdx := varx + strx;
     WHILE obj # NIL DO
@@ -1676,8 +1703,11 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     Files.WriteInt(R, tdw*4);  (*code len*)
     FOR i := 0 TO tdw-1 DO Files.WriteInt(R, td[i]) END ; (*type descriptors*)
     Files.WriteInt(R, pc);
-    Files.WriteChar(R, 0X); (*align to 4 bytes for test ONLY*)
-    FOR i := 0 TO (pc-1) DIV 2 DO Files.WriteInt(R, code[i]) END ;  (*program*)
+    (* Files.WriteChar(R, 0X); (*align to 4 bytes for test ONLY*) *)
+    FOR i := 0 TO (pc-1) DIV 2 DO 
+      Files.WriteInt(R, code[i]); 
+      (* IntToStr(code[i], msg); ORS.Raise(msg);  (* DEBUG ONLY *) *)
+    END ;  (*program*)
     obj := ORB.topScope.next;
     WHILE obj # NIL DO  (*commands*)
       IF (obj.exno # 0) & (obj.class = ORB.Const) & (obj.type.form = ORB.Proc) &
@@ -1720,16 +1750,93 @@ BEGIN relmap[0] := EQ; relmap[1] := NE; relmap[2] := LT; relmap[3] := LE; relmap
 
   (* Test: write a simple instruction and create file *)
   Open(0);
+  
+  (* Test immediate operations *)
+  PutI12(i32_ADD_exp12, 0, 1, 42);  (* ADD R0, R1, #42 *)
+  PutI12(i32_SUB_exp12, 2, 3, 100);  (* SUB R2, R3, #100 *)
+  PutI12(i32_AND_exp12, 4, 5, 255);  (* AND R4, R5, #255 *)
+  PutI12(i32_ORR_exp12, 6, 7, 15);   (* ORR R6, R7, #15 *)
+  PutI12(i32_EOR_exp12, 8, 9, 7);    (* EOR R8, R9, #7 *)
+  PutI12(i32_RSB_exp12, 10, 11, 1);  (* RSB R10, R11, #1 *)
+
+  (* Test 32-bit immediate operations *)
+  PutI32(i32_ADD_exp12, 1, 2, 1000, i32_ADD_reg);  (* ADD R1, R2, #1000 *)
+  PutI32(i32_SUB_exp12, 3, 4, 500, i32_SUB_reg);   (* SUB R3, R4, #500 *)
+
+  (* Test 32-bit branch operations *)
+  PutB32(i32_B_cond_imm21, GT, 100);  (* BGT label *)
+  PutB32(i32_B_cond_imm21, LT, 50);   (* BLT label *)
+  PutB32_2(i32_BL_imm25, 200);        (* BL label *)
+
+  (* Test MOV operations *)
+  PutMOV16(0, 1);  (* MOV R0, R1 *)
+  PutMOVI(1, 42);  (* MOV R2, #42 *)
+  PutMOVI(0, 42);  (* MOV R2, #42 *)
+  PutMOVI(0, 256);  (* MOV R2, #256 *)
+
+  (* Test 16-bit immediate operations *)
+  PutI16(i32_MOVW, 0, 1234H);  (* MOVW R0, #12345 *)
+  PutI16(i32_MOVT, 0, 5678H);  (* MOVT R0, #67890 *)
+
+  (* Test load/store operations *)
+  PutLS(i32_STR_imm8_i, 0, SP, -4);
+  PutLS(i32_STR_imm8_w, 0, SP, -8);
+  PutLS(i32_LDR_imm8_i, 0, SP, -12);
+  PutLS(i32_LDR_imm8_w, 0, SP, -16);
+  PutR32_1(i32_VMOVA, 1, 1, 0);
+  PutR32_1(i32_VMOVV, 1, 1, 0);
+
+  (* Test multiple load/store operations *)
+  PutLSM(i32_LDMIA_w, SP, {0,1,2,3});  (* LDMIA SP!, {R0,R1,R2,R3} *)
+  PutLSM(i32_STMDB_w, SP, {4,5,6});    (* STMDB SP!, {R4,R5,R6} *)
+
+  (* Test vector load/store operations *)
+  PutVLS(i32_VLDR, 0, SP, 8);   (*? VLDR S0, [SP, #8] *)
+  PutVLS(i32_VSTR, 1, SP, 12);  (*? VSTR S1, [SP, #12] *)
+
+  (* Test 32-bit arithmetic operations *)
+  PutR32_2(i32_ADD_reg, 1, 2, 3);  (* ADD R1, R2, R3 *)
+  PutR32_2(i32_SUB_reg, 4, 5, 6);  (* SUB R4, R5, R6 *)
+  PutR32_2(i32_RORS_reg, 1, 2, 3); (* RORS R1, R2, R3 *)
+
+  (* Test additional floating point operations *)
+  PutR32_1(i32_VADD, 1 , 2, 3);
+  PutR32_1(i32_VSUB, 4, 5, 6);  (* VSUB S10, S8, S12 *)
+  PutR32_1(i32_VNEG, 0, 1, 2);  (* VNEG S3, S2 *)
+  PutR32_1(i32_VABS, 0, 3, 4);  (* VABS S4, S3 *)
+  PutR32_1(i32_VCMP, 0, 1, 0);  (* VCMP S2, S0 *)
+  PutR32_1(i32_VCMPZ, 0, 2, 0); (* VCMPZ S4, #0 *)
+
+  (* Test additional multiplication operations *)
+  PutR32_2(i32_SDIV_reg, 0, 1, 2);  (* SDIV R0, R1, R2 *)
+  PutR32_2(i32_UBFX, 3, 4, 8);      (* UBFX R3, R4, #8, #width *)
+
+  (* Test ADC/SBC operations *)
+  PutR32_2(i32_ADC_reg, 5, 6, 7);  (* ADC R5, R6, R7 *)
+  PutR32_2(i32_SBC_reg, 8, 9, 10); (* SBC R8, R9, R10 *)
+
+
+  PutIns(1234H);
+
+  (* problematic sequence*)
   PutR32_2(i32_ADD_reg, 1, 2, 3);  (* Add 1 to R0 *)
   PutMOVI(0, 42);  (* Move immediate value 42 to register R0 *)
-  PutMOVI(0, 256);  (* Move immediate value 42 to register R0 *)
+  PutMOVI(0, 256);  (* Move immediate value 256 to register R0 *)
+  PutMOV16(11, 15);
   PutR32_2(i32_SUB_reg, 1, 2, 3);  (* Subtract 1 from R0 *)
   PutR32_2(i32_RORS_reg, 1, 2, 3);  (* RORS *)
+
+  (*fix B Test*)
   PutB32(i32_B_cond_imm21, NE, 0);
   fixB(pc-2, 4);
-  PutR32_2(i32_ADD_reg, 1, 2, 3); 
-  PutIns(1234H);
-  PutLS(i32_STR_imm8_w, 0, SP, -4);
+  
+  PutR32_1(i32_VCVTM, 0, 1, 2);
+  PutR32_1(i32_VCVT_if_s, 0, 3, 4);
+
+  PutR32_2(i32_MUL_reg, 0, 1, 2);
+  PutMUL(i32_MLS_reg, 1, 2, 3, 4); 
+  PutMUL(i32_UMUL_reg,5, 6, 7, 8);
+
   modid := "Test";
   Close(modid, 0, 0)
 
