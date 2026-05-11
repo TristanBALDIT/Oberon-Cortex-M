@@ -72,7 +72,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     i32_RSB_exp12 = 0F1C00000H;   (* RSB Rd, Rn, #imm12 *)
 
     i32_B_cond_imm21 = 0F0008000H; (* B label *)
-    i32_B_imm25 = 0F0008000H;   (* B label *)
+    i32_B_imm25 = 0F0009000H;   (* B label *)
     i32_BL_imm25 = 0F000D000H;   (* BL label *)
 
     i32_MOV_exp12 = 0F04F0000H;   (* MOV Rd, #const *)
@@ -162,6 +162,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     C18 = 40000H; (* Constante pour les décalages de 18 bits *)
     C19 = 80000H; (* Constante pour les décalages de 19 bits *)
     C20 = 100000H; (* Constante pour les décalages de 20 bits *)
+    C21 = 200000H; (* Constante pour les décalages de 21 bits *)
     C22 = 400000H; (* Constante pour les décalages de 22 bits *)
     C23 = 800000H; (* Constante pour les décalages de 23 bits *)
     C24 = 1000000H; (* Constante pour les décalages de 24 bits *)
@@ -333,9 +334,10 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   PROCEDURE PutB32_2(op, imm: INTEGER);
     VAR s, j1, j2: INTEGER;
   BEGIN
-    s := imm DIV C24;
-    j1 := ABS((1 - (imm DIV C23) MOD 2) - s);
-    j2 := ABS((1 - (imm DIV C22) MOD 2) - s);
+    imm := imm MOD C24;
+    s := (imm DIV C23) MOD 2;
+    j1 := 1 - ABS( (imm DIV C22) MOD 2 - s);
+    j2 := 1 - ABS((imm DIV C21) MOD 2 - s);
     PutIns(op DIV C16 + s* C10 + (imm DIV C11) MOD C10);
     PutIns(op MOD C16 + j1 * C13  + j2 * C11 + imm MOD C11)
   END PutB32_2;
@@ -364,7 +366,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE PutI12(op, rd, rn, imm12: INTEGER);
   BEGIN
-    PutIns(op DIV C16 + ((imm12 DIV C11) MOD 2) * C10 + rn);
+    PutIns(op DIV C16 + ((imm12 DIV C11) MOD 2) * C10 + rn); 
     PutIns(op MOD C16 + (imm12 DIV C8) MOD 8 * C12 + rd * C8 + imm12 MOD C8)
   END PutI12;
 
@@ -634,6 +636,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
         FixLink(x.b); PutI8(i16_MOV_imm8, RH, 1); PutB16(i16_B_cond_imm8, AL, 2 - dPC);
         FixLink(x.a); PutI8(i16_MOV_imm8, RH, 0); x.r := RH; incR
       END;
+      x.mode := Reg
     END;
   END load;
 
@@ -941,6 +944,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END Neg;
 
   PROCEDURE AddOp*(op: INTEGER; VAR x, y: Item);   (* x := x +- y *)
+    VAR msg: ARRAY 20 OF CHAR;
   BEGIN
     IF op = ORS.plus THEN
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a + y.a
@@ -1147,7 +1151,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     ELSIF x.mode = RegI THEN PutLS(op, y.r, x.r, x.a); DEC(RH);
     ELSE ORS.Raise("bad mode in Store")
     END ;
-    DEC(RH)
+    DEC(RH);
   END Store;
 
   PROCEDURE Storef(VAR x, y: Item); (* x := y*)
