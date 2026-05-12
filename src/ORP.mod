@@ -35,10 +35,9 @@ MODULE ORP; (*N. Wirth 1.7.97 / 8.3.2020  Oberon compiler for RISC in Oberon-07 
     IF (sym = ORS.period) & (obj.class = ORB.Mod) THEN
       ORS.Get(sym);
       IF sym = ORS.ident THEN obj := ORB.thisimport(obj); ORS.Get(sym);
-        IF obj = NIL THEN ORS.Raise("undef2"); obj := dummy END
+        IF obj = NIL THEN ORS.Raise("undef"); obj := dummy END
       ELSE ORS.Raise("identifier expected"); obj := dummy
       END
-    ELSIF (obj.lev > 0) & (obj.lev # level) & ((obj.class # ORB.Const) OR (obj.type.form # ORB.Proc)) THEN ORS.Raise("not accessibe")
     END
   END qualident;
 
