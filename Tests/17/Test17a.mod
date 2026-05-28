@@ -1,0 +1,15 @@
+MODULE Test17a;
+    VAR m, n: INTEGER;
+        x, y: REAL;
+        b: BOOLEAN; ch: CHAR;
+BEGIN
+    n := ABS(m);
+    y := ABS(x);
+    b := ODD(n);
+    n := ORD(ch);
+    n := FLOOR(x);
+    y := FLT(m);
+    n := LSL(m, 3);
+    n := ASR(m, 8);
+    m := ROR(m, n);
+END Test17a.

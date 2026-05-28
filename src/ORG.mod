@@ -36,6 +36,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     i16_STR_reg = 6000H;   (* STR Rd, [Rn, #off] *)
 
     i16_B_cond_imm8 = 0D000H;         (* B label *)
+    i16_B_imm11 = 0E000H;           (* B label *)
     i16_BX = 4700H;              (* BX Rm *)
     i16_BLX = 4780H;             (* BLX Rm *)
 
@@ -204,7 +205,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     litCount: INTEGER;
     modid: ORS.Ident;  (*for test*)
 
-  PROCEDURE IntToStr(n: INTEGER; VAR s: ARRAY OF CHAR);
+  PROCEDURE IntToStr*(n: INTEGER; VAR s: ARRAY OF CHAR);
     VAR i, j: INTEGER; neg: BOOLEAN; buf: ARRAY 16 OF CHAR;
   BEGIN
     neg := n < 0; IF neg THEN n := -n END;
@@ -327,8 +328,9 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE PutB32(op, cond, imm: INTEGER);
   BEGIN
-    PutIns(op DIV C16 + (imm DIV C19) * C10 + cond * C6 + (imm DIV C11) MOD C10);
-    PutIns(op MOD C16 + ((imm DIV C17) MOD 4) * C13  + ((imm DIV C18) MOD 2) * C11 + imm MOD C11)
+    imm := imm MOD C20;
+    PutIns(op DIV C16 + (imm DIV C19) MOD 2 * C10 + cond * C6 + (imm DIV C11) MOD C6);
+    PutIns(op MOD C16 + ((imm DIV C17) MOD 2) * C13  + ((imm DIV C18) MOD 2) * C11 + imm MOD C11)
   END PutB32;
 
   PROCEDURE PutB32_2(op, imm: INTEGER);
@@ -336,8 +338,8 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   BEGIN
     imm := imm MOD C24;
     s := (imm DIV C23) MOD 2;
-    j1 := 1 - ABS( (imm DIV C22) MOD 2 - s);
-    j2 := 1 - ABS((imm DIV C21) MOD 2 - s);
+    j1 := ABS((1 - (imm DIV C22) MOD 2) - s);
+    j2 := ABS((1 - (imm DIV C21) MOD 2) - s);
     PutIns(op DIV C16 + s* C10 + (imm DIV C11) MOD C10);
     PutIns(op MOD C16 + j1 * C13  + j2 * C11 + imm MOD C11)
   END PutB32_2;
@@ -348,14 +350,18 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     s := ins1 DIV C10 MOD 2;
     j1 := ins2 DIV C13 MOD 2;
     j2 := ins2 DIV C11 MOD 2;
-    RETURN  s * C20 + j2 * C19 + j1 * C17 + (ins1 MOD C6) * C11 + (ins2 MOD C11)
+    IF ins2 DIV C12 MOD 2  = 1 THEN
+      j1 := 1 - ABS(j1-s);
+      j2 := 1 - ABS(j2-s);
+    END;
+    RETURN  (-s) * C19 + j2 * C18 + j1 * C17 + (ins1 MOD C6) * C11 + (ins2 MOD C11)
   END DecodeB32;
 
   PROCEDURE PutMOV16(rd, rm: INTEGER);
     VAR d: INTEGER;
   BEGIN
     IF rd > 7 THEN d := 1; rd := rd - 8  ELSE d := 0 END;  
-    PutIns(i16_MOV_reg + d * C7 + rm * C3 + rd MOD C3)
+    PutIns(i16_MOV_reg + d * C7 + rm * C3 + rd MOD C3);
   END PutMOV16;
 
   PROCEDURE PutMUL(op, rd, rn, rm, ra: INTEGER);
@@ -372,7 +378,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE PutI16(op, rd, imm16: INTEGER);
   BEGIN
-    PutIns(op DIV C16 + ((imm16 DIV C15) MOD 2) * C10 + imm16 DIV C12 MOD C4);
+    PutIns(op DIV C16 + ((imm16 DIV C11) MOD 2) * C10 + imm16 DIV C12 MOD C4);
     PutIns(op MOD C16 + (imm16 DIV C8) MOD C3 * C12 + rd * C8 + imm16 MOD C8)
   END PutI16;
 
@@ -422,11 +428,11 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       INC(op, 200H);
       IF off >= C16 THEN ORS.Raise("PutLS offset too big") END;
       IF off >= C8 THEN
-      off_high := off DIV C8;
-      i := GetMSB(off_high);
-      j := LSL(off_high, 7-i) MOD C7 + (24 + 7 - i)* C7;
-      PutI12(i32_ADD_exp12, RH, rn, j);
-      rn := RH
+        off_high := off DIV C8;
+        i := GetMSB(off_high);
+        j := LSL(off_high, 7-i) MOD C7 + (24 + 7 - i)* C7;
+        PutI12(i32_ADD_exp12, RH, rn, j);
+        rn := RH
       END;
     END;
     PutIns(op DIV C16 + rn);
@@ -450,7 +456,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       END;
     END;
     PutIns(op DIV C16 + rn);
-    PutIns(op MOD C16 + off MOD C8 + rt * C12)
+    PutIns(op MOD C16 + (off MOD C8) DIV 4 + rt * C12)
   END PutVLS;
 
   PROCEDURE PutLSM(op, rn : INTEGER; list: SET);
@@ -481,7 +487,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   BEGIN 
     i := ORS.Pos();
     PutMOVI(TR, i);
-    offset := (7 - num - pc - dPC);
+    offset := ((7 - num) * 2 - pc - dPC);
     IF (offset < -128) OR (offset > 127) THEN
       PutB32(i32_B_cond_imm21, cond, offset);
     ELSE
@@ -509,7 +515,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     ELSE 
       PutIns( - mno * C8 + pno);
       PutIns(ORD(mno # 0) * C15 + (pc - fixorgP - 1));  (* TODO: Verify the offset calculation with the linker*)
-      fixorgP := pc - 1;
+      fixorgP := pc - 2;
     END
   END fixcode;
 
@@ -522,7 +528,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     ELSE
       PutIns( - mno * C8 + vno);
       PutIns(ORD(mno # 0) * C15 + (pc - fixorgD - 1));  (* TODO: Verify the offset calculation with the linker*)
-      fixorgD := pc - 1;
+      fixorgD := pc - 2;
     END
   END fixvar;
 
@@ -533,13 +539,23 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END fixI;
 
   PROCEDURE fixB(at, with: INTEGER);
-    VAR imm, ins: INTEGER;
+    VAR imm, ins1, ins2, j1, j2, s: INTEGER;
   BEGIN
-    imm := with - dPC;  (*PC is already advanced by 2 when the branch is executed*)
-    ins := GetIns(at);
-    PutAt(ins + ((imm DIV 20) MOD 2 - (ins DIV C10) MOD 2) * C10 + imm DIV C11 MOD C6 - ins MOD C6, at); 
-    ins := GetIns(at+1);
-    PutAt(ins + ((imm DIV 18) MOD 2 - (ins DIV C13) MOD 2) * C13 + ((imm DIV C19) MOD 2 - (ins DIV C11) MOD 2) * C11 + imm MOD C11 - ins MOD C11, at+1);
+    ins1 := GetIns(at);
+    ins2 := GetIns(at+1);
+    imm := (with - dPC);  (*PC is already advanced by 2 when the branch is executed*)
+    IF ins2 DIV C12 MOD 2 = 0 THEN 
+      imm := imm MOD C20;
+      PutAt(ins1 + ((imm DIV C19) MOD 2 - (ins1 DIV C10) MOD 2) * C10 + (imm DIV C11) MOD C6 - ins1 MOD C6, at); 
+      PutAt(ins2 + ((imm DIV C17) MOD 2 - (ins2 DIV C13) MOD 2) * C13 + ((imm DIV C18) MOD 2 - (ins2 DIV C11) MOD 2) * C11 + imm MOD C11 - ins2 MOD C11, at+1);
+    ELSE
+      imm := imm MOD C24;
+      s := (imm DIV C23) MOD 2;
+      j1 := ABS((1 - (imm DIV C22) MOD 2) - s);
+      j2 := ABS((1 - (imm DIV C21) MOD 2) - s);
+      PutAt(ins1 + (s - (ins1 DIV C10) MOD 2) * C10 + (imm DIV C11) MOD C10 - ins1 MOD C10, at);
+      PutAt(ins2 + (j1 - (ins2 DIV C13) MOD 2) * C13 + (j2 - (ins2 DIV C11) MOD 2) * C11 + imm MOD C11 - ins2 MOD C11, at+1);
+    END
   END fixB;
 
   PROCEDURE FixOne*(at: INTEGER);
@@ -616,9 +632,9 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
             ELSE
               PutI12(i32_SUB_imm12, RH, PC, c);
             END;
-          ELSE (*imported*) fixvar(x.r + 80H, x.a); PutI12(i32_MOVT, RH, 0, 0); 
+          ELSE (*imported*) fixvar(x.r + 80H, x.a); PutI16(i32_MOVT, RH, 0); 
           END
-        ELSE PutMOVI(RH, x.a);
+        ELSE PutMOVI(RH, x.a); 
         END;
         x.r := RH; incR
       ELSIF x.mode = ORB.Var THEN
@@ -632,8 +648,8 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
         x.r := RH; incR
       ELSIF x.mode = RegI THEN PutLS(op, x.r, x.r, x.a)
       ELSIF x.mode = Cond THEN 
-        PutB32(i32_B_cond_imm21, negated(x.r), 3 - dPC); 
-        FixLink(x.b); PutI8(i16_MOV_imm8, RH, 1); PutB16(i16_B_cond_imm8, AL, 2 - dPC);
+        PutB32(i32_B_cond_imm21, negated(x.r), 4 - dPC); 
+        FixLink(x.b); PutI8(i16_MOV_imm8, RH, 1); PutB16(i16_B_imm11, 0, 2 - dPC);
         FixLink(x.a); PutI8(i16_MOV_imm8, RH, 0); x.r := RH; incR
       END;
       x.mode := Reg
@@ -647,7 +663,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       ELSE fixvar(x.r, x.a); PutI16(i32_MOVT, RH, 0);
       END ;
       x.r := RH; incR
-    ELSIF x.mode = ORB.Par THEN PutLS(i32_LDR_pc_imm12, RH, SP, x.a + frame);
+    ELSIF x.mode = ORB.Par THEN PutLS(i32_LDR_imm8_i, RH, SP, x.a + frame);
       IF x.b # 0 THEN PutI32(i32_ADD_exp12, RH, RH, x.b, i32_ADD_reg) END ;
       x.r := RH; incR
     ELSIF x.mode = RegI THEN
@@ -660,6 +676,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE loadf(VAR x: Item);
     CONST op = i32_VLDR;
+    VAR msg: ARRAY 32 OF CHAR;
   BEGIN
     IF (x.type # ORB.realType) THEN ORS.Raise("loadf 0") END;
     IF x.mode # Reg THEN
@@ -698,7 +715,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE loadTypTagAdr(T: ORB.Type);
   BEGIN 
-    IF T.mno <= 0 THEN fixvar(0, T.len); T.len := pc - 1 (*insert fixorgD chain, fixed up in Close*)
+    IF T.mno <= 0 THEN fixvar(0, T.len); T.len := pc - 2 (*insert fixorgD chain, fixed up in Close*)
     ELSE (*imported*) fixvar(- T.mno, 0);
     END;
     PutI16(i32_MOVT, RH, 0);
@@ -772,14 +789,14 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     ELSE load(y);
       IF check THEN  (*check array bounds*)
         IF lim >= 0 THEN PutI32(i32_CMP_exp12, 0, y.r, lim, i32_CMP_reg)
-        ELSIF x.mode IN {ORB.Var, ORB.Par} THEN (*open array param*) PutLS(i32_LDR_imm8_i, RH, SP, x.a + frame); PutR16(i16_CMP_reg, 0, y.r, RH)
+        ELSIF x.mode IN {ORB.Var, ORB.Par} THEN (*open array param*) PutLS(i32_LDR_imm8_i, RH, SP, x.a + 4 + frame); PutR16(i16_CMP_reg, 0, y.r, RH)
         ELSIF x.mode = RegI THEN (*dynamic open array*) PutLS(i32_LDR_imm8_i, RH, x.r, -16); (*len*) PutR16(i16_CMP_imm8, 0, y.r, RH)
         ELSE ORS.Raise("error in Index")
         END ;
         Trap(GE, 1)  
       END ;
       (*TODO : continue modifications*)
-      IF s = 4 THEN PutR32_2(i32_LSL_imm5, y.r, 0, y.r + LSL(2,7)) ELSIF s > 1 THEN PutMOVI(RH, s); PutR32_2(i32_MUL_reg, y.r, y.r, RH) END ;
+      IF s = 4 THEN PutR32_2(i32_LSL_imm5, y.r, 0, y.r + LSL(2,6)) ELSIF s > 1 THEN PutMOVI(RH, s); PutR32_2(i32_MUL_reg, y.r, y.r, RH) END ;
       IF x.mode = ORB.Var THEN
         IF x.r > 0 THEN (*local*) PutR32_2(i32_ADD_reg, y.r, SP, y.r); INC(x.a, frame)
         ELSIF x.r = 0 THEN (*global*) fixvar(0, 0); PutI16(i32_MOVT, RH, 0); PutR32_2(i32_ADD_reg, y.r, y.r, RH)
@@ -885,7 +902,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       SetCC(x, 7)
     ELSE (*fetch tag into RH*)
       IF varpar THEN PutLS(i32_LDR_imm8_i, RH, SP, x.a+4+frame)
-      ELSE load(x);
+      ELSE load(x); PutI8(i16_CMP_imm8, x.r, 0);
         pc0 := pc; PutB32(i32_B_cond_imm21, EQ, 0);  (*NIL belongs to every pointer type*)
         PutLS(i32_LDR_imm8_i, RH, x.r, -8)
       END ;
@@ -909,7 +926,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END Not;
 
   PROCEDURE And1*(VAR x: Item);   (* x := x & *)
-  BEGIN loadCond(x); PutB32(i32_B_cond_imm21, negated(x.r), x.a); x.a := pc-1; FixLink(x.b); x.b := 0
+  BEGIN loadCond(x); PutB32(i32_B_cond_imm21, negated(x.r), x.a); x.a := pc-2; FixLink(x.b); x.b := 0
   END And1;
 
   PROCEDURE And2*(VAR x, y: Item);
@@ -917,7 +934,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END And2;
 
   PROCEDURE Or1*(VAR x: Item);   (* x := x OR *)
-  BEGIN loadCond(x); PutB32(i32_B_cond_imm21, x.r, x.b);  x.b := pc-1; FixLink(x.a); x.a := 0
+  BEGIN loadCond(x); PutB32(i32_B_cond_imm21, x.r, x.b);  x.b := pc-2; FixLink(x.a); x.a := 0
   END Or1;
 
   PROCEDURE Or2*(VAR x, y: Item);
@@ -934,7 +951,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       END
     ELSIF x.type.form = ORB.Real THEN
       IF x.mode = ORB.Const THEN x.a := x.a + 7FFFFFFFH + 1
-      ELSE load(x); PutR32_1(i32_VNEG, 0, x.r, x.r);
+      ELSE loadf(x); PutR32_1(i32_VNEG, 0, x.r, x.r);
       END
     ELSE (*form = Set*)
       IF x.mode = ORB.Const THEN x.a := -x.a-1 
@@ -944,7 +961,6 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END Neg;
 
   PROCEDURE AddOp*(op: INTEGER; VAR x, y: Item);   (* x := x +- y *)
-    VAR msg: ARRAY 20 OF CHAR;
   BEGIN
     IF op = ORS.plus THEN
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a + y.a
@@ -974,7 +990,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     ELSIF (y.mode = ORB.Const) & (y.a >= 1) & (log2(y.a, e) = 1) THEN load(x);
       IF e # 0 THEN PutR32_2(i32_LSL_imm5, x.r, 0, x.r + LSL(e MOD C2,6) + LSL(e DIV C2,12)) END
     ELSIF (x.mode = ORB.Const) & (x.a >= 1) & (log2(x.a, e) = 1)  THEN load(y); 
-      IF e # 0 THEN PutR32_2(i32_LSL_imm5, x.r, 0, x.r + LSL(e MOD C2,6) + LSL(e DIV C2,12)) END; x.mode := Reg; x.r := y.r
+      IF e # 0 THEN PutR32_2(i32_LSL_imm5, y.r, 0, y.r + LSL(e MOD C2,6) + LSL(e DIV C2,12)) END; x.mode := Reg; x.r := y.r
     ELSE 
       IF (x.mode = ORB.Const) & (x.a = 0) THEN 
       ELSIF (y.mode = ORB.Const) & (y.a = 0) THEN x.mode := ORB.Const; x.a := 0;
@@ -995,10 +1011,10 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       ELSE
         IF yc & (y.a <= 0) THEN ORS.Raise("bad divisor")
         ELSE load(x); load(y);
-          PutR32_2(i32_SUB_reg, RH, x.r, y.r + 64 + LSL(7,7) + LSL(24,12)); 
+          PutR32_2(i32_SUB_reg, RH, x.r, y.r + 32 + LSL(3,6) + LSL(7,12)); 
           PutR32_2(i32_SDIV_reg, RH, RH, y.r);
           IF ~yc & check THEN PutI8(i16_CMP_imm8, y.r, 0); Trap(LE, TrapDivZero) END;
-          PutR32_2(i32_ADD_reg, RH-2, x.r, y.r + 64 + LSL(7,7) + LSL(24,12)); 
+          PutR32_2(i32_ADD_reg, RH-2, x.r, y.r + 32 + LSL(3,6) + LSL(7,12)); 
           DEC(RH); x.r := RH-1
         END;
       END
@@ -1012,10 +1028,10 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       ELSE
         IF yc & (y.a <= 0) THEN ORS.Raise("bad modulus")
         ELSE load(x); load(y);
-          PutR32_2(i32_SUB_reg, RH, x.r, y.r + 64 + LSL(7,7) + LSL(24,12)); 
+          PutR32_2(i32_SUB_reg, RH, x.r, y.r + 32 + LSL(3,6) + LSL(7,12)); 
           PutR32_2(i32_SDIV_reg, RH, RH, y.r);
           IF ~yc & check THEN PutI8(i16_CMP_imm8, y.r, 0); Trap(LE, TrapDivZero) END;
-          PutR32_2(i32_ADD_reg, RH-1, RH, y.r + 64 + LSL(7,7) + LSL(24,12));
+          PutR32_2(i32_ADD_reg, RH-1, RH, y.r + 32 + LSL(3,6) + LSL(7,12));
           PutMUL(i32_MLS_reg, RH-2, RH, y.r, x.r); 
           DEC(RH); x.r := RH-1
         END
@@ -1056,7 +1072,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       ELSE load(y); PutI12(i32_MOV_exp12, RH, 0, 2); PutR32_2(i32_LSL_reg, y.r, RH, y.r)
       END ;
       IF x.mode = ORB.Const THEN PutI32(i32_ADD_exp12, RH-1, y.r, -x.a, i32_ADD_reg); x.mode := Reg;
-      ELSE DEC(RH); PutR32_2(i32_SUB_reg, RH-1, x.r, y.r)
+      ELSE DEC(RH); PutR32_2(i32_SUB_reg, RH-1, y.r, x.r)
       END;
       x.r := RH-1;
     END
@@ -1065,7 +1081,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   PROCEDURE In*(VAR x, y: Item);  (* x := x IN y *)
   BEGIN load(y);
     IF x.mode = ORB.Const THEN PutR32_2(i32_RORS_imm5, y.r, 0, y.r +  LSL((x.a + 1) MOD maxSet MOD C2,6) + LSL((x.a + 1) MOD maxSet DIV C2,12)); DEC(RH)
-    ELSE load(x); PutI12(i32_MOV_exp12, x.r, x.r, 1); PutR32_2(i32_RORS_reg, y.r, y.r, x.r); DEC(RH, 2)
+    ELSE load(x); PutI12(i32_ADD_exp12, x.r, x.r, 1); PutR32_2(i32_RORS_reg, y.r, y.r, x.r); DEC(RH, 2)
     END ;
     SetCC(x, MI)
   END In;
@@ -1198,7 +1214,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     PutLS(i32_LDR_imm8_w, RH, y.r, 4); 
     PutI12(i32_SUBS_exp12, RH-1, RH-1, 1);  (*TODO : add setflags*)
     PutLS(i32_STR_imm8_w, RH, x.r, 4); 
-    PutB32(i32_B_cond_imm21, GT, -3 - dPC);
+    PutB32(i32_B_cond_imm21, GT, -6 - dPC);
     RH := 0
   END StoreStruct;
 
@@ -1215,7 +1231,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     PutLS(i32_LDR_imm8_w, RH, y.r, 4); 
     PutLS(i32_STR_imm8_w, RH, x.r, 4);
     PutR32_2(i32_ASRS_imm5, RH, 0, RH + LSL(24 MOD C2,6) + LSL(24 DIV C2,12));
-    PutB32(i32_B_cond_imm21, NE,  -3 - dPC);  RH := 0
+    PutB32(i32_B_cond_imm21, NE,  -6 - dPC);  RH := 0
    END CopyString;
   
   (* Code generation for parameters *)
@@ -1295,13 +1311,13 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END Here;
 
   PROCEDURE FJump*(VAR L: INTEGER);
-  BEGIN PutB32_2(i32_B_imm25, L); L := pc-1
+  BEGIN PutB32_2(i32_B_imm25, L); L := pc-2
   END FJump;
 
   PROCEDURE CFJump*(VAR x: Item);
   BEGIN loadCond(x);
     IF x.r # AL THEN 
-      PutB32(i32_B_cond_imm21, negated(x.r), x.a); FixLink(x.b); x.a := pc-1
+      PutB32(i32_B_cond_imm21, negated(x.r), x.a); FixLink(x.b); x.a := pc-2
     END;
   END CFJump;
 
@@ -1450,7 +1466,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     VAR cond: INTEGER;
   BEGIN loadCond(x);
     IF x.a = 0 THEN cond := negated(x.r)
-    ELSE PutB32(i32_B_cond_imm21, x.r, x.b); FixLink(x.a); x.b := pc-1; cond := AL
+    ELSE PutB32(i32_B_cond_imm21, x.r, x.b); FixLink(x.a); x.b := pc-2; cond := AL
     END ;
     Trap(cond, TrapAssert); FixLink(x.b)
   END Assert; 
@@ -1462,15 +1478,15 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE Pack*(VAR x, y: Item);
     VAR z: Item;
-  BEGIN z := x; load(x); load(y);
-    PutR32_2(i32_LSL_imm5, y.r, 0, y.r + LSL(23 MOD C2,6) + LSL(23 DIV C2,12)); PutR32_2(i32_ADD_reg, x.r, x.r, y.r); DEC(RH); Store(z, x)
+  BEGIN x.type := ORB.intType; z := x; load(x); load(y);
+    PutR32_2(i32_LSL_imm5, y.r, 0, y.r + LSL(23 MOD C2,6) + LSL(23 DIV C2,12)); PutR32_2(i32_ADD_reg, x.r, x.r, y.r); DEC(RH); Store(z, x); x.type := ORB.realType; 
   END Pack;
 
   PROCEDURE Unpk*(VAR x, y: Item);
     VAR z, e0: Item;
-  BEGIN  z := x; load(x); e0.mode := Reg; e0.r := RH; e0.type := ORB.intType;
+  BEGIN  x.type := ORB.intType; z := x; load(x); e0.mode := Reg; e0.r := RH; e0.type := ORB.intType;
     PutR32_2(i32_ASR_imm5, RH, 0, x.r + LSL(23 MOD C2,6) + LSL(23 DIV C2,12)); PutI12(i32_SUB_imm12, RH, RH, 127); Store(y, e0); incR;
-    PutR32_2(i32_LSL_imm5, RH, 0, RH + LSL(23 MOD C2,6) + LSL(23 DIV C2,12)); PutR32_2(i32_SUB_reg, x.r, x.r, RH); Store(z, x)
+    PutR32_2(i32_LSL_imm5, RH, 0, RH + LSL(23 MOD C2,6) + LSL(23 DIV C2,12)); PutR32_2(i32_SUB_reg, x.r, x.r, RH); Store(z, x); x.type := ORB.realType;
   END Unpk;
 
   PROCEDURE Led*(VAR x: Item);
@@ -1541,14 +1557,14 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END Floor;
 
   PROCEDURE Float*(VAR x: Item);
-  BEGIN loadf(x); PutR32_1(i32_VMOVV, x.r, 0, x.r); PutR32_1(i32_VCVT_if_s, 0, x.r, x.r)
+  BEGIN load(x); PutR32_1(i32_VMOVV, x.r, 0, x.r); PutR32_1(i32_VCVT_if_s, 0, x.r, x.r)
   END Float;
 
   (*TODO check if modif are usefull*)
   PROCEDURE Ord*(VAR x: Item);
   BEGIN
     IF x.mode IN {ORB.Var, ORB.Par, RegI, Cond} THEN load(x);
-      IF (x.type.form = ORB.Pointer) OR (x.type.base.form = ORB.Array) THEN PutI12(i32_AND_exp12, x.r, x.r, 16) END
+      IF (x.type.form = ORB.Pointer) & (x.type.base.form = ORB.Array) THEN PutI12(i32_AND_exp12, x.r, x.r, 16) END
     ELSIF (x.mode = Reg) & (x.type = ORB.realType) THEN PutR32_1(i32_VMOVA, x.r, 0, x.r)
     END
   END Ord;
@@ -1704,14 +1720,17 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     Files.WriteInt(R, varx);  (*variable space*)
     Files.WriteInt(R, strx);
     FOR i := 0 TO strx-1 DO Files.WriteChar(R, str[i]) END ;  (*strings*)
-    Files.WriteInt(R, tdw*4);  (*code len*)
+    Files.WriteInt(R, tdw*4);
+    Files.WriteInt(R, 1234H);
     FOR i := 0 TO tdw-1 DO Files.WriteInt(R, td[i]) END ; (*type descriptors*)
-    Files.WriteInt(R, pc);
+    Files.WriteInt(R, pc);     (*code len*)
     (* Files.WriteChar(R, 0X); (*align to 4 bytes for test ONLY*) *)
-    FOR i := 0 TO (pc-1) DIV 2 DO 
+    FOR i := 0 TO ((pc-1) DIV 2) - 1 DO 
       Files.WriteInt(R, code[i]); 
       (* IntToStr(code[i], msg); ORS.Raise(msg);  (* DEBUG ONLY *) *)
     END ;  (*program*)
+    IF pc MOD 2 = 0 THEN Files.WriteInt(R, code[(pc-1) DIV 2]) 
+    ELSE Files.WriteChar(R, CHR(code[(pc-1) DIV 2] MOD C8)); Files.WriteChar(R, CHR(code[(pc-1) DIV 2] MOD C16 DIV C8)) END ; 
     obj := ORB.topScope.next;
     WHILE obj # NIL DO  (*commands*)
       IF (obj.exno # 0) & (obj.class = ORB.Const) & (obj.type.form = ORB.Proc) &
