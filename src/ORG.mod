@@ -144,6 +144,8 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
     i32_UBFX = 0F3C00000H;    (* UBFX Rd, Rn, #lsb, #width *)
 
+    i32_NOP = 0F3AF8000H;   (* NOP *)
+
     C1 = 2H;     (* Constante pour les décalages de 1 bit *)
     C2 = 4H;     (* Constante pour les décalages de 2 bits *)
     C3 = 8H;    (* Constante pour les décalages de 3 bits *)
@@ -383,7 +385,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END PutI16;
 
   PROCEDURE DecomposeConst(const : INTEGER; VAR imm: INTEGER): BOOLEAN;
-    VAR rot: INTEGER; ret: BOOLEAN; msg: ARRAY 32 OF CHAR;
+    VAR rot: INTEGER; ret: BOOLEAN;
   BEGIN
     imm := const; rot := 0; ret := TRUE;
     IF ((imm < 0) OR (imm > 255)) THEN
@@ -676,7 +678,6 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE loadf(VAR x: Item);
     CONST op = i32_VLDR;
-    VAR msg: ARRAY 32 OF CHAR;
   BEGIN
     IF (x.type # ORB.realType) THEN ORS.Raise("loadf 0") END;
     IF x.mode # Reg THEN
@@ -1337,12 +1338,14 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   BEGIN (*r > 0*) 
     DEC(frame, 4*r);
     PutLSM(i32_STMDB_w, SP, {0..r-1});
+    (* PutLS(i32_STR_imm8_w, RA, SP, 4*r); *)
   END SaveRegs;
 
   PROCEDURE RestoreRegs(r: INTEGER); (*R[0 .. r-1]*)
   BEGIN (*r > 0*) 
     DEC(frame, 4*r);
     PutLSM(i32_LDMIA_w, SP, {0..r-1});
+    (* PutLS(i32_LDR_imm8_w, RA, SP, 4*r); *)
   END RestoreRegs;
 
   PROCEDURE PrepCall*(VAR x: Item; VAR r: INTEGER);
@@ -1383,7 +1386,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
         j := LSL(off_high, 7-i) MOD C7 + (24 + 7 - i)* C7;
         PutI12(i32_SUB_exp12, SP, SP, j) 
     END; (*TODO : verify the instruction*)
-    PutLS(i32_STR_imm8_w, RA, SP, -(locblksize MOD C8));
+    PutLS(i32_STR_imm8_w, RA, SP, -(locblksize MOD C8));      (* store RA in the stack, could be optimized *)
     IF parblksize > 4 THEN 
       PutI12(i32_ADD_exp12, SP, SP, 4); (*avance de 4 pour simuler STMIB*)
       PutLSM(i32_STMIA_i, SP, {0..(parblksize DIV 4 -2)});
@@ -1721,16 +1724,14 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     Files.WriteInt(R, strx);
     FOR i := 0 TO strx-1 DO Files.WriteChar(R, str[i]) END ;  (*strings*)
     Files.WriteInt(R, tdw*4);
-    Files.WriteInt(R, 1234H);
     FOR i := 0 TO tdw-1 DO Files.WriteInt(R, td[i]) END ; (*type descriptors*)
+    IF pc MOD 2 = 1 THEN PutIns(i16_NOP) END;  (*align to 4 bytes*)
     Files.WriteInt(R, pc);     (*code len*)
     (* Files.WriteChar(R, 0X); (*align to 4 bytes for test ONLY*) *)
-    FOR i := 0 TO ((pc-1) DIV 2) - 1 DO 
-      Files.WriteInt(R, code[i]); 
+    FOR i := 0 TO ((pc-1) DIV 2) DO  (*program*)
+      Files.WriteInt(R, code[i])
       (* IntToStr(code[i], msg); ORS.Raise(msg);  (* DEBUG ONLY *) *)
-    END ;  (*program*)
-    IF pc MOD 2 = 0 THEN Files.WriteInt(R, code[(pc-1) DIV 2]) 
-    ELSE Files.WriteChar(R, CHR(code[(pc-1) DIV 2] MOD C8)); Files.WriteChar(R, CHR(code[(pc-1) DIV 2] MOD C16 DIV C8)) END ; 
+    END ;  
     obj := ORB.topScope.next;
     WHILE obj # NIL DO  (*commands*)
       IF (obj.exno # 0) & (obj.class = ORB.Const) & (obj.type.form = ORB.Proc) &
