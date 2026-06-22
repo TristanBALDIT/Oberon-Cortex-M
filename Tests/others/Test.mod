@@ -1,0 +1,8 @@
+MODULE Test;
+
+PROCEDURE add*(a : INTEGER; b : INTEGER) : INTEGER;
+BEGIN
+    RETURN a + b
+END add;
+
+END Test.
