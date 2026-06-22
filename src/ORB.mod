@@ -13,17 +13,10 @@ MODULE ORB;   (*NW 25.6.2014  / AP 4.3.2020 / 8.3.2019  in Oberon-07*)
       SProc* = 6; SFunc* = 7; Mod* = 8;
 
     (* form values*)
-
-    (* 
       Byte* = 1; Bool* = 2; Char* = 3; Int* = 4; Real* = 5; Set* = 6;
       Pointer* = 7; NilTyp* = 8; NoTyp* = 9; Proc* = 10;
-      String* = 11; Array* = 12; Record* = 13;
-    *)
-    
-      Byte* = 1; Bool* = 2; Char* = 3; Int* = 4; Real* = 7; Set* = 8;
-      Pointer* = 9; NilTyp* = 10; NoTyp* = 11; Proc* = 12;
-      String* = 13; Array* = 14; Record* = 15;
-      
+      String* = 11; Array* = 12; Record* = 13; Ptrs* = {Pointer, NilTyp}; Procs* = {Proc, NoTyp};
+
   TYPE Object* = POINTER TO ObjDesc;
     Module* = POINTER TO ModDesc;
     Type* = POINTER TO TypeDesc;
@@ -171,18 +164,11 @@ MODULE ORB;   (*NW 25.6.2014  / AP 4.3.2020 / 8.3.2019  in Oberon-07*)
       fld, par, obj, mod, last: Object;
       t: Type;
       name, modname: ORS.Ident;
-      msg : ARRAY 64 OF CHAR;
       abs_form: INTEGER;
   BEGIN Read(R, ref);
     IF ref < 0 THEN T := typtab[-ref]  (*already read*)
     ELSE NEW(t); T := t; typtab[ref] := t; t.mno := thismod.lev;
       Read(R, form); t.form := form;
-      abs_form := form; IF form < 0 THEN abs_form := -abs_form END;
-      IF form >= 0 THEN msg[0] := 30X ELSE msg[0] := 2DX END;
-      msg[1] := CHR(ORD(30X) + abs_form DIV 10);
-      msg[2] := CHR(ORD(30X) + abs_form MOD 10);
-      msg[3] := 0X;
-      ORS.Raise(msg);
       IF form = Pointer THEN InType(R, thismod, t.base); t.size := 4
       ELSIF form = Array THEN
         InType(R, thismod, t.base); Files.ReadNum(R, t.len); Files.ReadNum(R, t.size)
@@ -203,11 +189,9 @@ MODULE ORB;   (*NW 25.6.2014  / AP 4.3.2020 / 8.3.2019  in Oberon-07*)
         IF last = NIL THEN t.dsc := obj ELSE last.next := obj END
       ELSIF form = Proc THEN
         InType(R, thismod, t.base);
-        ORS.Raise("parameters");
         obj := NIL; np := 0; Read(R, class);
         WHILE class # 0 DO  (*parameters*)
-          NEW(par); par.class := class; Read(R, readonly); par.rdo := readonly = 1;
-          Read(R,par.val); 
+          NEW(par); par.class := class; Read(R, readonly); par.rdo := readonly = 1; 
           InType(R, thismod, par.type); par.next := obj; obj := par; INC(np); Read(R, class)
         END ;
         t.dsc := obj; t.nofpar := np; t.size := 4
@@ -234,7 +218,6 @@ MODULE ORB;   (*NW 25.6.2014  / AP 4.3.2020 / 8.3.2019  in Oberon-07*)
       thismod: Object;
       modname, fname: ORS.Ident;
       F: Files.File; R: Files.Rider;
-      msg : ARRAY 64 OF CHAR;
   BEGIN
     IF modid1 = "SYSTEM" THEN
       thismod := ThisModule(modid, modid1, TRUE,  key); DEC(nofmod);
@@ -248,7 +231,6 @@ MODULE ORB;   (*NW 25.6.2014  / AP 4.3.2020 / 8.3.2019  in Oberon-07*)
         Read(R, class);
         WHILE class # 0 DO
           NEW(obj); obj.class := class; Files.ReadString(R, obj.name);
-          ORS.Raise("new object"); ORS.Raise(obj.name); 
           InType(R, thismod, obj.type); obj.lev := -thismod.lev;
           IF class = Typ THEN
             t := obj.type; t.typobj := obj; Read(R, k);  (*fixup bases of previously declared pointer types*)
@@ -259,9 +241,6 @@ MODULE ORB;   (*NW 25.6.2014  / AP 4.3.2020 / 8.3.2019  in Oberon-07*)
             ELSIF class = Var THEN Files.ReadNum(R, obj.val); obj.rdo := TRUE
             END
           END ;
-          msg[0] := CHR(ORD(30X) + class MOD 10);
-          msg[1] := 0X;
-          ORS.Raise(msg);
           obj.next := thismod.dsc; thismod.dsc := obj; Read(R, class)
         END ;
       ELSE ORS.Raise("import not available")
