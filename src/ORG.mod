@@ -845,16 +845,16 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     END
   END Q;
 
-  PROCEDURE FindRefFlds(typ: ORB.Type; off: INTEGER; VAR tdw: INTEGER);
+  PROCEDURE FindRefFlds(ftyp: SET; typ: ORB.Type; off: INTEGER; VAR tdw: INTEGER);
     VAR fld: ORB.Object; i, s: INTEGER;
   BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN td[tdw] := off; INC(tdw)
+    IF typ.form IN ftyp THEN td[tdw] := off; INC(tdw)
     ELSIF typ.form = ORB.Record THEN
       fld := typ.dsc;
-      WHILE fld # NIL DO FindRefFlds(fld.type, fld.val + off, tdw); fld := fld.next END
+      WHILE fld # NIL DO FindRefFlds(ftyp, fld.type, fld.val + off, tdw); fld := fld.next END
     ELSIF typ.form = ORB.Array THEN
       s := typ.base.size;
-      FOR i := 0 TO typ.len-1 DO FindRefFlds(typ.base, i*s + off, tdw) END
+      FOR i := 0 TO typ.len-1 DO FindRefFlds(ftyp, typ.base, i*s + off, tdw) END
     END
   END FindRefFlds;
 
@@ -891,7 +891,8 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     ELSE Q(T, tdw);
       WHILE k < 3 DO td[tdw] := -1; INC(tdw); INC(k) END
     END ;
-    FindRefFlds(T, 0, tdw); td[tdw] := -1; INC(tdw); 
+    FindRefFlds(ORB.Ptrs, T, 0, tdw); td[tdw] := -1; INC(tdw);
+    FindRefFlds(ORB.Procs, T, 0, tdw); td[tdw] := -1; INC(tdw); 
     IF tdw >= maxTD THEN ORS.Raise("too many record types"); tdw := 0 END
   END BuildTD;
 
@@ -1660,30 +1661,30 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   END SetDataSize;
 
   PROCEDURE Header*;
-  BEGIN entry := pc*4;
+  BEGIN entry := pc*2;
     PutLS(i32_STR_imm8_w, RA, SP, -4);
   END Header;
 
-  PROCEDURE NofPtrs(typ: ORB.Type): INTEGER;
+  PROCEDURE NofPtrs(ftyp: SET; typ: ORB.Type): INTEGER;
     VAR fld: ORB.Object; n: INTEGER;
   BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN n := 1
+    IF typ.form IN ftyp THEN n := 1
     ELSIF typ.form = ORB.Record THEN fld := typ.dsc; n := 0;
-      WHILE fld # NIL DO n := NofPtrs(fld.type) + n; fld := fld.next END
-    ELSIF typ.form = ORB.Array THEN n := NofPtrs(typ.base) * typ.len
+      WHILE fld # NIL DO n := NofPtrs(ftyp, fld.type) + n; fld := fld.next END
+    ELSIF typ.form = ORB.Array THEN n := NofPtrs(ftyp, typ.base) * typ.len
     ELSE n := 0
     END ;
     RETURN n
   END NofPtrs;
 
-  PROCEDURE FindPtrs(VAR R: Files.Rider; typ: ORB.Type; adr: INTEGER);
+  PROCEDURE FindPtrs(VAR R: Files.Rider; ftyp: SET; typ: ORB.Type; adr: INTEGER);
     VAR fld: ORB.Object; i, s: INTEGER;
   BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN Files.WriteInt(R, adr)
+    IF typ.form IN ftyp THEN Files.WriteInt(R, adr)
     ELSIF typ.form = ORB.Record THEN fld := typ.dsc;
-      WHILE fld # NIL DO FindPtrs(R, fld.type, fld.val + adr); fld := fld.next END
+      WHILE fld # NIL DO FindPtrs(R, ftyp, fld.type, fld.val + adr); fld := fld.next END
     ELSIF typ.form = ORB.Array THEN s := typ.base.size;
-      FOR i := 0 TO typ.len-1 DO FindPtrs(R, typ.base, i*s + adr) END
+      FOR i := 0 TO typ.len-1 DO FindPtrs(R, ftyp, typ.base, i*s + adr) END
     END
   END FindPtrs;
 
@@ -1692,7 +1693,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       i, comsize, nofimps, nofptrs, size, tdx, fix: INTEGER;
       name: ORS.Ident;
       F: Files.File; R: Files.Rider;
-      msg: ARRAY 32 OF CHAR;
+      (* msg: ARRAY 32 OF CHAR;  DEBUG ONLY*)
   BEGIN  (*exit code*)
     obj := ORB.topScope.next; nofimps := 0; comsize := 4; nofptrs := 0; tdx := varx + strx;
     WHILE obj # NIL DO
@@ -1701,7 +1702,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
           & (obj.type.nofpar = 0) & (obj.type.base = ORB.noType) THEN i := 0; (*count commands*)
         WHILE obj.name[i] # 0X DO INC(i) END ;
         i := (i+4) DIV 4 * 4; INC(comsize, i+4)
-      ELSIF obj.class = ORB.Var THEN INC(nofptrs, NofPtrs(obj.type))  (*count pointers*)
+      ELSIF obj.class = ORB.Var THEN INC(nofptrs, NofPtrs(ORB.Ptrs + ORB.Procs, obj.type))  (*count pointers*)
       ELSIF (obj.class = ORB.Typ) & (obj.type.form = ORB.Record) & (obj.type.typobj = obj) THEN (*build type descriptors*)
         fix := obj.type.len; (*heading o fixup chain of instructions pairs inserted into fixorgD chain in loadTypTagAdr*)
         BuildTD(obj.type, tdw); (*obj.len.len now used as TD offset in bytes relative to tdx*)
@@ -1709,8 +1710,8 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       END ;
       obj := obj.next
     END ;
-    size := tdx + tdw*4 + comsize + (pc + nofimps + nofent + nofptrs + 2)*4;  (*varsize includes type descriptors*)
-    
+    size := tdx + tdw*4 + comsize + (pc + nofimps + nofent + nofptrs + 2)*4;  (*varsize includes type descriptors*)    
+
     ORB.MakeFileName(name, modid, appendix); (*write code file*)
     F := Files.New(name); Files.Set(R, F, 0); Files.WriteString(R, modid); Files.WriteInt(R, key); Files.WriteChar(R, version);
     Files.WriteInt(R, size);
@@ -1761,7 +1762,13 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     END ;
     obj := ORB.topScope.next;
     WHILE obj # NIL DO  (*pointer variables*)
-      IF obj.class = ORB.Var THEN FindPtrs(R, obj.type, obj.val) END ;
+      IF obj.class = ORB.Var THEN FindPtrs(R, ORB.Ptrs, obj.type, obj.val) END ;
+      obj := obj.next
+    END ;
+    Files.WriteInt(R, -1);
+    obj := ORB.topScope.next;
+    WHILE obj # NIL DO  (*procedure variables*)
+      IF obj.class = ORB.Var THEN FindPtrs(R, ORB.Procs, obj.type, obj.val) END ;
       obj := obj.next
     END ;
     Files.WriteInt(R, -1);
@@ -1772,6 +1779,8 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
 BEGIN relmap[0] := EQ; relmap[1] := NE; relmap[2] := LT; relmap[3] := LE; relmap[4] := GT; relmap[5] := GE;
 
+
+  (*
   (* Test: write a simple instruction and create file *)
   Open(0);
   
@@ -1863,5 +1872,7 @@ BEGIN relmap[0] := EQ; relmap[1] := NE; relmap[2] := LT; relmap[3] := LE; relmap
 
   modid := "Test";
   Close(modid, 0, 0)
+
+  *)
 
 END ORG.
