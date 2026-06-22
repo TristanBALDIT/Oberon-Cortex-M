@@ -1,31 +1,37 @@
 MODULE ORL;
 
-  IMPORT SYSTEM, LibC, Files, Error, Err, Out, ORG;
+  IMPORT SYSTEM, LibC, Files, Error, Err, Out;
 
   CONST MemSize = 1000000H;
-        DescSize = 96; MnLenght = 32; BootSec = 2; BootSize = 192; FPrint = 12345678H;
-        elfheader = 80H; pbase = 10000H + elfheader;
-        noerr* = 0; nofile* = 1; badversion* = 2; badkey* = 3; badfile* = 4; nospace* = 5;
-        TrapAdr = 4; DestAdr = 8; MemAdr = 12; AllocAdr = 16; RootAdr = 20; StackAdr = 24; FPrintAdr = 28; ModAdr = 32;
+        DescSize = 96; MnLenght = 32;
+        BootSec = 2; BootSize = 192; FPrint = 12345678H;
+        
+        (* NXP Bare-metal Target Memory Alignment *)
+        pbase = 0H; (* Base of Flash memory for Execute-In-Place (XIP) *)
+        
+        noerr* = 0;
+        nofile* = 1; badversion* = 2; badkey* = 3; badfile* = 4; nospace* = 5;
+        TrapAdr = 4;
+        DestAdr = 8; MemAdr = 12; AllocAdr = 16; RootAdr = 20; StackAdr = 24; FPrintAdr = 28;
+        ModAdr = 32;
 
-        C3 = 8H; C4 = 10H; C6 = 40H; C8 = 100H; C10 = 400H; C11 =800H; C12 = 1000H; C13 = 2000H; C14 = 4000H; C15 = 4000H;
-        C16 = 10000H; C21 = 200000H; C22 = 400000H; C23 = 800000H; C24 = 1000000H; C26 = 4000000H;
-
+        C3 = 8H; C4 = 10H; C6 = 40H; C8 = 100H; C10 = 400H; C11 =800H;
+        C12 = 1000H; C13 = 2000H; C14 = 4000H; C15 = 4000H;
+        C16 = 10000H; C21 = 200000H;
+        C22 = 400000H; C23 = 800000H; C24 = 1000000H; C26 = 4000000H; C27 = 8000000H; C31 = 80000000H;
         i32_B = 0F0009000H; 
         i32_BL = 0F000D000H; 
         i32_MOVW = 0F2400000H;
 
         dPC = 2;
-
-        AllocPtrInit = 0H;
-
+        AllocPtrInit = 0; (*start index for bin*)
         versionkey = 3;
-
         limit = 100000H;  (*TODO build it correctly*)
+
 
   TYPE Path = ARRAY 256 OF CHAR;
        Module* = POINTER TO ModDesc;
-       Command* = PROCEDURE;
+       Command* = INTEGER;  (*PROCEDURE adr*)
        ModuleName* = ARRAY MnLenght OF CHAR;
        ModDesc* = RECORD
          name: ModuleName;
@@ -33,7 +39,7 @@ MODULE ORL;
          key*, num*, size*, refcnt*: INTEGER;
          var*, str*, tdx*, prg*, imp*, cmd*, ent*, ptr*, pvr*: INTEGER; (*addresses*)
          selected*, marked, hidden, sel: BOOLEAN;
-         final: Command;
+         adr: INTEGER;
        END;
 
   VAR arg                   : Path;
@@ -44,17 +50,28 @@ MODULE ORL;
       appendix : ARRAY 5 OF CHAR;
       bin : ARRAY 1000000 OF BYTE;
 
-  PROCEDURE GetInt(index: INTEGER): INTEGER;
+
+  PROCEDURE err(str : ARRAY OF CHAR);
+  BEGIN
+    Err.String(str); Err.Ln();
+  END err;
+
+  PROCEDURE GetInt(index: INTEGER): INTEGER; (*rebuilt ins in order from bin*)
   BEGIN 
-    RETURN ORD(bin[index]) * C12 + ORD(bin[index+1]) * C8 + ORD(bin[index+2]) * C4 + ORD(bin[index+3])
+    RETURN  ROR(ORD(bin[index+3]) * C24 + ORD(bin[index+2]) * C16 + ORD(bin[index+1]) * C8 + ORD(bin[index]), 16)
   END GetInt;
 
-  PROCEDURE PutInt(index: INTEGER; value: INTEGER);
+  PROCEDURE GetInt2(index: INTEGER): INTEGER; (*rebuilt data/ins keeping bin order*)
   BEGIN 
-    bin[index] := SYSTEM.VAL(BYTE, (value DIV C12) MOD C4);
-    bin[index+1] := SYSTEM.VAL(BYTE, (value DIV C8) MOD C4);
-    bin[index+2] := SYSTEM.VAL(BYTE, (value DIV C4) MOD C4);
-    bin[index+3]  := SYSTEM.VAL(BYTE, value MOD C4)
+    RETURN  ORD(bin[index+3]) * C24 + ORD(bin[index+2]) * C16 + ORD(bin[index+1]) * C8 + ORD(bin[index])  
+  END GetInt2;
+
+  PROCEDURE PutInt(index: INTEGER; value: INTEGER); (*32 bits little endian*)
+  BEGIN 
+    bin[index+3] := (value DIV C24) MOD C8;
+    bin[index+2] := (value DIV C16) MOD C8;
+    bin[index+1] := (value DIV C8) MOD C8;
+    bin[index]  := value MOD C8
   END PutInt;
 
   PROCEDURE PutChar(index: INTEGER; chr : CHAR);
@@ -69,7 +86,7 @@ MODULE ORL;
 
   PROCEDURE GetByte(index: INTEGER): BYTE;
   BEGIN
-    RETURN bin[index]
+    RETURN ORD(bin[index])
   END GetByte;
 
   PROCEDURE PutByte(index: INTEGER; b: BYTE);
@@ -84,47 +101,6 @@ MODULE ORL;
     REPEAT Fname[i] := appendix[j]; INC(i); INC(j) UNTIL appendix[j] = 0X;
     Fname[i] := 0X;
   END MakeFileName;
-
-  PROCEDURE WriteELF32( VAR R: Files.Rider; size: INTEGER);
-  CONST a32EMachine = 40; a32EFlags = 5000400H; PHEntSize = 20H; ElfHdrSize = 34H;
-  BEGIN
-    Files.WriteInt(R, ((ORD("F")*100H+ORD("L"))*100H+ORD("E"))*100H + 7FH); 
-    Files.WriteInt(R, 00010101H);
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, a32EMachine*10000H+2);
-    Files.WriteInt(R, 1);
-    Files.WriteInt(R, pbase + 1); (*e_entry virtual adr to first start control*)
-    Files.WriteInt(R, 40H);    (*e_phoff, program header's table's file offset*)
-
-    Files.WriteInt(R, 0);     (*e_shoff, section header's table's file offset*)
-    Files.WriteInt(R, a32EFlags); (*e_flags*)
-    Files.WriteInt(R, PHEntSize*10000H+ElfHdrSize);    (*e_ehsize, ELF header's size in bytes*) (* e_phentsize, size of one entry in file's program header table*)
-    Files.WriteInt(R, 40*10000H+1);     (*e_shentsize, section header entry size, was 40 *) (* e_phnum, number of entries in the program header table *)
-    Files.WriteInt(R, 0);     (*e_shstrndx, e_shnum *)
-    Files.WriteInt(R, 0);     (* 12 bytes padding needed *)
-    Files.WriteInt(R, 0); 
-    Files.WriteInt(R, 0); 
-
-    (*Program Header Table*)
-    Files.WriteInt(R, 1);     (*p_type, 1 for loadable segment*)
-    Files.WriteInt(R, 0);     (*p_offset, offset from the beginning of the file to the first byte of the segment in the file*)
-    Files.WriteInt(R, pbase - elfheader); (*p_vaddr, virtual address of the first byte in mem*)
-    Files.WriteInt(R, 0);     (*p_paddr, physical address ignored*)
-    Files.WriteInt(R, size + elfheader);  (*p_filesz, number of bytes in the file image of the segment*)
-    Files.WriteInt(R, MemSize);
-    Files.WriteInt(R, 7);     (*p_flags, PF_R + PF_W + PF_X , allow rwx*)
-    Files.WriteInt(R, 10000H);(*p_align, page size*)
-
-    Files.WriteInt(R, 0);     (*padding to elfheadersize*)
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, 0);
-    Files.WriteInt(R, 0);
-  END WriteELF32;
 
   PROCEDURE error(code: INTEGER; name: ARRAY OF CHAR);
   BEGIN res := code; importing := name
@@ -165,37 +141,45 @@ MODULE ORL;
 
   PROCEDURE LinkOne(name: ARRAY OF CHAR; VAR newmod: Module; VAR R1: Files.Rider);
     VAR mod, impmod: Module;
-      i, n, key, impkey, mno, nofimps, size: INTEGER;
+      i, j, n, key, impkey, mno, nofimps, size: INTEGER;
       version, p, u, v, w, x: INTEGER; (*addresses*)
       ch: CHAR;
       body: Command;
-      fixorgP, fixorgD, fixorgT, fixorgM: INTEGER;
+      fixorgP, fixorgD, fixorgT: INTEGER;
       rd, disp, adr, inst, pno, vno, dest, offset, offset2, s, j1, j2: INTEGER;
       name1, impname: ModuleName;
       F: Files.File; R: Files.Rider;
       import: ARRAY 64 OF Module;
+      impadr : INTEGER;
+      msg : ARRAY 32 OF CHAR;
 
   BEGIN mod := root; error(noerr, name); nofimps := 0;
+    err("t");
     WHILE (mod # NIL) & (name # mod.name) DO mod := mod.next END;
     IF mod = NIL THEN (*link*)
       CheckName(name, n);
       IF res = noerr THEN MakeFileName(name1, name, ".arm"); F := Files.Old(name1) ELSE F := NIL END;
+      err(name1);
       IF F # NIL THEN
-        Files.Set(R, F, 0);  Files.ReadString(R, name1); Files.ReadInt(R, key); Files.ReadChar(R, ch);
+        Files.Set(R, F, 0); Files.ReadString(R, name1); Files.ReadInt(R, key); Files.ReadChar(R, ch);
         version := ORD(ch); 
         Files.ReadInt(R, size); importing := name1;
         IF (version = versionkey) (*regular module*) THEN 
           Files.ReadString(R, impname); (*imports*)
+          err("t3"); err(impname);
           WHILE (impname[0] # 0X) & (res = noerr) DO
             Files.ReadInt(R, impkey); (*import key*)
-            LinkOne(impname, impmod, R1); import[nofimps] := impmod; INC(nofimps);
+            Err.Int(impkey, 10); Err.Ln();
+            LinkOne(impname, impmod, R1); import[nofimps] := impmod; importing := name1;
+            Err.String("impadr:"); Err.Int(import[nofimps].adr, 10); Err.Ln();
             IF res = noerr THEN
               IF impkey = impmod.key THEN INC(impmod.refcnt); INC(nofimps)
               ELSE error(badkey, name1); imported := impname;
               END
             END;
             Files.ReadString(R, impname)
-          END
+          END;
+          err("t4");
         ELSE error(badversion, name1)
         END
       ELSE error(nofile, name)  
@@ -203,127 +187,154 @@ MODULE ORL;
       IF res = noerr THEN 
         INC(size, DescSize);
         IF AllocPtr + size < limit THEN (*allocate space*)
-          p := AllocPtr; mod := NIL; mod := SYSTEM.VAL2(Module, p); 
+          p := AllocPtr; mod := NIL; NEW(mod); mod.adr := p;
           AllocPtr := (p + size + 3) DIV 4 * 4; mod.size := AllocPtr - p; u := Reused - Start + pbase;
           IF root = NIL THEN mod.num := 1 ELSE mod.num := root.num + 1 END;
           mod.next := root; root := mod
         ELSE error(nospace, name1)
         END
       END;
+      err("t5");
       IF res = noerr THEN (*read file*)
         INC(p, DescSize); (*allocate descriptor*)
         mod.name := name; mod.key := key; mod.refcnt := 0; i := n;
         WHILE i < MnLenght DO mod.name[i] := 0X; INC(i) END;
+        Err.String(mod.name); Err.Ln();
         mod.selected := FALSE; mod.hidden := FALSE; mod.marked := FALSE; mod.sel := FALSE;
         mod.var := p; Files.ReadInt(R,n);
-        WHILE n > 0 DO SYSTEM.PUT(p, 0); INC(p, 4);  DEC(n, 4) END; (*variable space*)
-        mod.str := p; Files.ReadInt(R,n);
-        WHILE n > 0 DO Files.ReadChar(R, ch); SYSTEM.PUT(p, ch); INC(p); DEC(n) END; (*strings*)
-        mod.tdx := p; Files.ReadInt(R,n);
-        WHILE n > 0 DO Files.ReadInt(R, w); SYSTEM.PUT(p, w); INC(p,4); DEC(n, 4) END; (*type descriptors*)
+        WHILE n > 0 DO PutInt(p, 0); INC(p, 4);  DEC(n, 4) END; (*variable space*)
+        mod.str := p; Files.ReadInt(R,n); 
+        err("t6");
+        WHILE n > 0 DO Files.ReadChar(R, ch); PutChar(p, ch); INC(p); DEC(n) END; (*strings*)
+        mod.tdx := p; Files.ReadInt(R,n); 
+        err("t7");
+        WHILE n > 0 DO Files.ReadInt(R, w); PutInt(p, w); INC(p,4); DEC(n, 4) END; (*type descriptors*)
         mod.prg := p; Files.ReadInt(R,n);
-        WHILE n > 0 DO Files.ReadInt(R, w); SYSTEM.PUT(p, w); INC(p,4); DEC(n) END; (*program code*)
+        err("t8");
+        WHILE n > 0 DO Files.ReadInt(R, w); Err.Int(w, 10); Err.Ln(); PutInt(p, w); INC(p,4); DEC(n, 2); END; (*program code*)
         mod.imp := p; i := 0; 
-        WHILE i < nofimps DO SYSTEM.PUT(p, import[i]); INC(p,4); INC(i) END; (*copy imports*)
+        err("t9");
+        Err.Int(nofimps, 10); Err.Ln();
+        Err.Int(mod.imp, 10); Err.Ln();
+        WHILE i < nofimps DO Err.Int(p, 10); Err.Ln(); PutInt(p, import[i].adr); INC(p,4); INC(i) END; (*copy imports*)
         mod.cmd := p; Files.ReadChar(R, ch);
+        err("t10"); 
         WHILE ch # 0X DO (*commands*)
-          REPEAT SYSTEM.PUT(p, ch); INC(p); Files.ReadChar(R, ch) UNTIL ch = 0X;
-          REPEAT SYSTEM.PUT(p, 0X); INC(p) UNTIL p MOD 4 = 0; 
-          Files.ReadInt(R,n); SYSTEM.PUT(p, n); INC(p, 4); Files.ReadChar(R, ch)
+          REPEAT PutChar(p, ch); INC(p); Files.ReadChar(R, ch) UNTIL ch = 0X;
+          REPEAT PutChar(p, 0X); INC(p) UNTIL p MOD 4 = 0; 
+          Files.ReadInt(R,n); PutInt(p, n); INC(p, 4); Files.ReadChar(R, ch)
         END;
-        REPEAT SYSTEM.PUT(p, 0X); INC(p) UNTIL p MOD 4 = 0;
-        mod.ent := p; Files.ReadInt(R,n);
-        WHILE n > 0 DO Files.ReadInt(R, w); SYSTEM.PUT(p, w); INC(p,4); DEC(n) END; (*entries*)
-        mod.ptr := p; Files.ReadInt(R, w);
-        WHILE w >= 0 DO SYSTEM.PUT(p, mod.var + w + u); INC(p,4); Files.ReadInt(R, w) END; (*pointers refs*)
-        SYSTEM.PUT(p, 0); INC(p,4);
-        mod.pvr := p; Files.ReadInt(R, w);
-        WHILE w >= 0 DO SYSTEM.PUT(p, mod.var + w + u); INC(p,4); Files.ReadInt(R, w) END; (*procedure variable refs*)
-        SYSTEM.PUT(p, 0); INC(p,4);
-        Files.ReadInt(R, fixorgP); Files.ReadInt(R, fixorgD); 
-        Files.ReadInt(R, fixorgT); Files.ReadInt(R, fixorgM);
-        Files.ReadInt(R, w); x := mod.prg + w + u;  body := NIL; body := SYSTEM.VAL2(Command, x); 
-        Files.ReadInt(R, w);
-        mod.final := NIL;
-        IF w >= 0 THEN x := mod.prg + w + u; mod.final := SYSTEM.VAL2(Command, x) END; 
+        err("t11");
+        REPEAT PutChar(p, 0X); INC(p) UNTIL p MOD 4 = 0;
+        mod.ent := p; Files.ReadInt(R,n); 
+        WHILE n > 0 DO Files.ReadInt(R, w); PutInt(p, w); INC(p,4); DEC(n) END; (*entries*)
+        mod.ptr := p; Files.ReadInt(R, w); 
+        WHILE w >= 0 DO PutInt(p, mod.var + w + u); INC(p,4); Files.ReadInt(R, w) END; (*pointers refs*)
+        PutInt(p, 0); INC(p,4); 
+        mod.pvr := p; Files.ReadInt(R, w); Err.Int(w,10); Err.Ln();
+        WHILE w >= 0 DO PutInt(p, mod.var + w + u); INC(p,4); Files.ReadInt(R, w) END; (*procedure variable refs*)
+        PutInt(p, 0); INC(p,4); err("t12");
+        Files.ReadInt(R, fixorgP); Files.ReadInt(R, fixorgD); Files.ReadInt(R, fixorgT);
+        Files.ReadInt(R, w); body := mod.prg + w + u; 
+        Err.String("prg "); Err.Int(mod.prg, 10); Err.Ln();
+        Err.Int(w, 10); Err.Ln();
+        Err.Int(u, 10); Err.Ln();
         Files.ReadChar(R, ch);
-        IF ch # "0" THEN mod := NIL; error(badfile, name) END
+        IF ch # "O" THEN mod := NIL; error(badfile, name) END
       END;
       IF res = noerr THEN (*fixup of BL*)
-        adr := mod.prg + fixorgP;
+        adr := mod.prg + fixorgP; 
+        Err.Int(mod.prg, 10); Err.Ln();
         WHILE adr # mod.prg DO
-          SYSTEM.GET(adr, inst);
-          IF inst DIV C16 = -1 THEN dest := Start + TrapAdr; 
+          Err.Int(adr,10); Err.Ln();
+          inst := GetInt(adr);
+          Err.Int(inst,10); Err.Ln();
+          IF inst DIV C16 = -1 THEN dest := Start + TrapAdr;
           ELSE 
             mno := inst DIV C24 MOD 80H;
             pno := inst DIV C16 MOD 100H;
-            SYSTEM.GET(mod.imp + (mno-1)*4, impmod);
-            SYSTEM.GET(impmod.ent + pno * 4, dest); dest := dest + impmod.prg + impmod.pvr;
+            Err.Int(mno, 5); Err.Ln();
+            Err.Int(pno, 5); Err.Ln();
+            impadr := GetInt2(mod.imp + (mno-1)*4);
+            Err.Int(impadr, 10); Err.Ln();
+            j := 0; impmod := NIL;
+            WHILE (impadr # import[j].adr) & (j < nofimps) DO INC(j) END;
+            IF impadr # import[j].adr THEN Err.String("Link error : import not found"); Err.Ln() END;
+            impmod := import[j];
+            dest := GetInt2(impmod.ent + pno * 4); dest := dest + impmod.prg + impmod.pvr;
           END;
           offset := dest - (adr + Reused);
-          offset2 := ((offset DIV 4) - dPC) MOD C24;
+          Err.Int(offset, 10); Err.Ln();
+          offset2 := ((offset DIV 2) - dPC) MOD C24;
+          Err.Int(offset2, 10); Err.Ln();
           s := offset2 DIV C23;
+          Err.Int(s, 10); Err.Ln();
           j1 := ABS((1 - offset2 DIV C22 MOD 2) - s);
           j2 := ABS((1 - offset2 DIV C21 MOD 2) - s);
-          SYSTEM.PUT(adr, i32_BL + s * C26 + (offset2 DIV C11) MOD C10 * C16 + j1 * C13 + j2 * C11 + offset2 MOD C11);
+          Err.Int(j1, 10); Err.Ln();
+          Err.Int(j2, 10); Err.Ln();
+          PutInt(adr, ROR(i32_BL  + s * C26 + (offset2 DIV C11) MOD C10 * C16 + j1 * C13 + j2 * C11 + offset2 MOD C11, 16));
           adr := adr - inst MOD C15 * 2
         END;
+        err("t13");  
         (*fixup of LDR/STR/ADD*)
         adr := mod.prg + fixorgD;
         WHILE adr # mod.prg DO
-          SYSTEM.GET(adr, inst);
+          Err.Int(adr,10); Err.Ln();
+          inst := GetInt(adr); 
           mno := inst DIV C24 MOD 80H;
           dest := inst DIV C16 MOD C16;
           disp := inst MOD C15;
           IF ~ODD(inst DIV C15) THEN (*global*) INC(dest, mod.var + u);
           ELSE (*import *)
-            SYSTEM.GET(mod.imp + (mno-1)*4, impmod);
+            impadr := GetInt2(mod.imp + (mno-1)*4);
+            j := 0; impmod := NIL;
+            WHILE (impadr # import[j].adr) & (j < nofimps) DO INC(j) END;
+            IF impadr # import[j].adr THEN Err.String("Link error : import not found"); Err.Ln() END;
+            impmod := import[j];
             vno := dest MOD 100H;
-            SYSTEM.GET(impmod.ent + vno * 4, dest);
+            dest := GetInt2(impmod.ent + vno * 4);
             IF inst < 0 THEN INC(dest, impmod.prg - Start + impmod.pvr) 
             ELSE INC(dest, impmod.var + impmod.pvr)
             END;
             INC(dest, pbase);
           END;
-          SYSTEM.GET(adr + 4, inst);
-          SYSTEM.PUT(adr, i32_MOVW + (dest DIV C11 MOD 2) * C26 + (dest DIV C12 MOD C4) * C16 + (dest DIV C10 MOD C3) * C12 + dest MOD C8);
+          Err.Int(mod.var,10); Err.Ln(); 
+          Err.Int(dest,10); Err.Ln(); 
+          inst := GetInt(adr + 4);
+          PutInt(adr, ROR(i32_MOVW + (dest DIV C11 MOD 2) * C26 + (dest DIV C12 MOD C4) * C16 + 
+          (dest DIV C8 MOD C3) * C12 + dest MOD C8 + (inst DIV C8 MOD C4) * C8, 16));
+          PutInt(adr + 4, ROR(inst + (dest DIV C27 MOD C4) * C16 + (dest DIV C24 MOD C3) * C12 + 
+          dest DIV C16 MOD C8,  16));
           adr := adr - disp * 2
-        END;  
+        END;
+        err("t14");  
         (*fixup of type descriptors*)
         adr := mod.tdx + fixorgT * 4;
         WHILE adr # mod.tdx DO
-          SYSTEM.GET(adr, inst);
+          inst := GetInt(adr);
           mno := inst DIV C24 MOD C6;
           vno := inst DIV C12 MOD C12;
           disp := inst MOD C12;
           IF mno = 0 THEN (*global*) inst := mod.tdx + u + vno
           ELSE (*import*)
-             SYSTEM.GET(mod.imp + (mno-1)*4, impmod);
-             SYSTEM.GET(impmod.ent + vno * 4, offset); 
-             inst := impmod.var - Start + pbase + impmod.pvr + offset
+            impadr := GetInt2(mod.imp + (mno-1)*4);
+            j := 0; impmod := NIL;
+            WHILE (impadr # import[j].adr) & (j < nofimps) DO INC(j) END;
+            IF impadr # import[j].adr THEN Err.String("Link error : import not found"); Err.Ln() END;
+            impmod := import[j];
+            offset := GetInt2(impmod.ent + vno * 4); 
+            inst := impmod.var - Start + pbase + impmod.pvr + offset
           END;
-          SYSTEM.PUT(adr, inst); adr := adr - disp * 4
-        END;  
-        (*fixup of method tables*)
-        adr := mod.tdx + fixorgM * 4;
-        WHILE adr # mod.tdx DO
-          SYSTEM.GET(adr, inst);
-          mno := inst DIV C26 MOD C6;
-          vno := inst DIV C10 MOD C16;
-          disp := inst MOD C10;
-          IF mno = 0 THEN (*global*) inst := mod.prg + u + vno
-          ELSE (*import*)
-             SYSTEM.GET(mod.imp + (mno-1)*4, impmod);
-             SYSTEM.GET(impmod.ent + vno * 4, offset); 
-             inst := impmod.prg - Start + pbase + impmod.pvr + offset
-          END;
-          SYSTEM.PUT(adr, inst); adr := adr - disp * 4
-        END;  
-        SYSTEM.PUT(Start, SYSTEM.ADR(body) - pbase); (*module initialization body*)
+          PutInt(adr, inst); adr := adr - disp * 4
+        END;
+        err("t15");    
+        PutInt(Start, body - pbase); (*module initialization body*)
+        Err.Int(body-pbase, 10); Err.Ln();
         (*write module to boot file*)
-        i := SYSTEM.VAL(INTEGER, mod); n := 8;
-        WHILE n > 0 DO SYSTEM.GET(i, w); Files.WriteInt(R1, w); INC(i, 4); DEC(n) END; (*name*)
-        IF mod.next # NIL THEN Files.WriteInt(R1, SYSTEM.VAL(INTEGER, mod.next) - Start + pbase + mod.next.pvr) (*next*)
+        i := mod.adr; n := MnLenght;
+        WHILE n > 0 DO Files.WriteChar(R1, mod.name[MnLenght-n]); INC(i); DEC(n) END; (*name*)
+        IF mod.next # NIL THEN Files.WriteInt(R1, mod.next.adr - Start + pbase + mod.next.pvr) (*next*)
         ELSE Files.WriteInt(R1, 0) 
         END;
         Files.WriteInt(R1, mod.key); Files.WriteInt(R1, mod.num); 
@@ -334,23 +345,29 @@ MODULE ORL;
         Files.WriteInt(R1, mod.ent + u); Files.WriteInt(R1, mod.ptr + u); 
         Files.WriteInt(R1, mod.pvr + u); INC(i, 56);
         WHILE i < mod.imp DO
-          SYSTEM.GET(i, w); Files.WriteInt(R1, w); INC(i, 4)  (*variables, strings, TD, program code*)
+          w := GetInt2(i); Files.WriteInt(R1, w); INC(i, 4)  (*variables, strings, TD, program code*)
         END;
         WHILE i < mod.cmd DO
-          SYSTEM.GET(i, w); impmod := NIL; impmod := SYSTEM.VAL2(Module, w); Files.WriteInt(R1, w - Start + pbase + impmod.pvr); INC(i, 4)  (*imports*)
+          w := GetInt2(i);
+          j := 0; impmod := NIL;
+          WHILE (w # import[j].adr) & (j < nofimps) DO INC(j) END;
+          IF w # import[j].adr THEN Err.String("Link error : import not found"); Err.Ln() END;
+          impmod := import[j];
+          Files.WriteInt(R1, w - Start + pbase + impmod.pvr); INC(i, 4)  (*imports*)
         END;
         WHILE i < mod.ent DO
-          SYSTEM.GET(i, w); Files.WriteInt(R1, w); INC(i, 4)  (*commands*)
+          w := GetInt2(i); Files.WriteInt(R1, w); INC(i, 4)  (*commands*)
         END;
         p := mod.var;
         WHILE i < mod.ptr DO
-          SYSTEM.GET(i, w); Files.WriteInt(R1, w); SYSTEM.PUT(p, w); INC(i, 4); INC(p, 4)  (*copy entries to variable area*)
+          w := GetInt2(i); Files.WriteInt(R1, w); PutInt(p, w); INC(i, 4); INC(p, 4)  (*copy entries to variable area*)
         END;
         mod.ent := mod.var;
         WHILE i < AllocPtr DO
-          SYSTEM.GET(i, w); Files.WriteInt(R1, w); INC(i, 4)  (*pointers and procedure variable refs*)
+          w := GetInt2(i); Files.WriteInt(R1, w); INC(i, 4)  (*pointers and procedure variable refs*)
         END;
         mod.pvr := Reused; INC(Reused, AllocPtr - p); AllocPtr := p; (*reuse module area after entries for the next module*)
+        Err.Int(Reused, 10); Err.Ln();
       ELSIF res >= badkey THEN importing := name;
         WHILE nofimps > 0 DO DEC(nofimps); DEC(import[nofimps].refcnt) END
       END;
@@ -367,32 +384,36 @@ MODULE ORL;
       name, name2: ModuleName;
 	BEGIN res := -1; root := NIL; Start := AllocPtrInit; AllocPtr := Start + ModAdr; Reused := 0;
     IF ParseFileName(filename, name2) THEN
-      MakeFileName(name, name2, ".elf");
+      MakeFileName(name, name2, ".bin");
       F := Files.New(name); Files.Set(R, F, 0);
       i := Start;
-      WHILE i < AllocPtr DO SYSTEM.PUT(i, 0); Files.WriteInt(R, 0); INC(i, 4) END; (*place holders*)
+      err("t");
+      WHILE i < AllocPtr DO PutInt(i, 0); Files.WriteInt(R, 0); INC(i, 4) END; (*place holders*)
+      err("t2");
       LinkOne(name2, M, R);  (*link process*)
       IF res = noerr THEN M := root;
         WHILE M # NIL DO 
-          Files.Set(R,F,SYSTEM.VAL(INTEGER, M) - Start + pbase + M.pvr + 48 + elfheader); Files.WriteInt(R, M.refcnt); (*insert refcnt*)
+          Files.Set(R,F, M.adr - Start + pbase + M.pvr + 48); Files.WriteInt(R, M.refcnt); (*insert refcnt*)
           M := M.next
         END; 
-        SYSTEM.GET(Start, x); (*adress of init body of topmodule relative to start*)
-        x := x MOD C24;
+        x := GetInt2(Start); (*adress of init body of topmodule relative to start*)
+        x := (x DIV 2 - dPC) MOD C24;
         s := x DIV C23 MOD 2;
         j1 := ABS((1 - x DIV C22 MOD 2) - s);
         j2 := ABS((1 - x DIV C21 MOD 2) - s);
-        SYSTEM.PUT(Start, i32_B + s * C26 + (x DIV C11) MOD C10 * C16 + j1 * C13 + j2 * C11 + x MOD C11); (*jump to start of program*)
-        SYSTEM.PUT(Start + TrapAdr, 0); (*trap handler, overwritten by the inner core*)
-        SYSTEM.PUT(Start + DestAdr, 0); (*destination address of the prelinked, executable binary*)
-        SYSTEM.PUT(Start + MemAdr, 1000000H); (*limit of mem, overwritten by bootloader*)
-        SYSTEM.PUT(Start + AllocAdr, AllocPtr + Reused - Start + pbase); (*address of the end of the module space loaded*)
-        SYSTEM.PUT(Start + RootAdr, SYSTEM.VAL(INTEGER, root) - Start + pbase + root.pvr); (*current root of the loaded modules*)
-        SYSTEM.PUT(Start + StackAdr, 100000H); (*limit of module area, overwritten by the bootloader*)
-        SYSTEM.PUT(Start + FPrintAdr, FPrint); (*fingerprint*)
+        Err.Int(x, 10); Err.Ln();
+        Err.Int(j1, 10); Err.Ln();
+        Err.Int(j2, 10); Err.Ln();
+        PutInt(Start, ROR(i32_B + s * C26 + (x DIV C11) MOD C10 * C16 + j1 * C13 + j2 * C11 + x MOD C11, 16)); (*jump to start of program*)
+        PutInt(Start + TrapAdr, 0); (*trap handler, overwritten by the inner core*)
+        PutInt(Start + DestAdr, 0); (*destination address of the prelinked, executable binary*)
+        PutInt(Start + MemAdr, 1000000H); (*limit of mem, overwritten by bootloader*)
+        PutInt(Start + AllocAdr, AllocPtr + Reused - Start + pbase); (*address of the end of the module space loaded*)
+        PutInt(Start + RootAdr, root.adr - Start + pbase + root.pvr); (*current root of the loaded modules*)
+        PutInt(Start + StackAdr, 100000H); (*limit of module area, overwritten by the bootloader*)
+        PutInt(Start + FPrintAdr, FPrint); (*fingerprint*)
         Files.Set(R, F, 0);  i := Start;
-        WriteELF32(R, AllocPtr + Reused - Start); (*write ELF header*)
-        WHILE i < Start + ModAdr DO SYSTEM.GET(i, x); Files.WriteInt(R, x); INC(i, 4) END; (*insert boot parameters*)
+        WHILE i < Start + ModAdr DO x := GetInt2(i); Err.Int(x, 10); Err.Ln(); Files.WriteInt(R, x); INC(i, 4) END; (*insert boot parameters*)
         Files.Register(F)
       ELSE
         IF res = nofile THEN Err.String("Link error : module not found"); Err.Ln()
@@ -404,6 +425,68 @@ MODULE ORL;
       END
     ELSE Err.String("Link error : invalid source file name"); Err.Ln() END
 	END Link;
+
+
+  PROCEDURE NXP_Header(VAR R: Files.Rider; imageLength: INTEGER);
+  VAR 
+    i: INTEGER;
+    sp, pc: INTEGER;
+    nmi, hardFault, memManage, busFault, usageFault: INTEGER;
+    svCall, debugMonitor: INTEGER;
+    imageType, extHeaderOffset, executionAddress: INTEGER;
+  BEGIN 
+    (* 1. Set up standard addresses based on your 0x100 code placement *)
+    sp := 020040000H;           (* Top of SRAM for MCXN947 *)
+    pc := 000000101H;           (* Code entry point at 0x100 + 1 for Thumb bit *)
+    
+    (* System exception stubs (Assuming they sit sequentially right after entry code) *)
+    nmi        := 000000105H;   (* 0x104 + 1 *)
+    hardFault  := 000000109H;   (* 0x108 + 1 *)
+    memManage  := 00000010DH;   (* 0x10C + 1 *)
+    busFault   := 00000010DH;   (* Map remaining faults to a generic loop stub *)
+    usageFault := 00000010DH;
+    
+    svCall       := 00000010DH;
+    debugMonitor := 00000010DH;
+
+    (* Metadata Constants *)
+    imageType        := 0;      (* 0 = Plain Execute-In-Place (XIP) *)
+    extHeaderOffset  := 0;      (* No extended or CRC header *)
+    executionAddress := 0;      (* Must be 0 for XIP images *)
+
+    (* 2. Serialize the exact NXP Container Table layout (36 bytes total) *)
+    (* Offset 00H *) Files.WriteInt(R, sp);
+    (* Offset 04H *) Files.WriteInt(R, pc);
+    
+    (* Offset 08H to 1FH: Vector Table Entries Part 1 (24 bytes = 6 words) *)
+    Files.WriteInt(R, nmi);
+    Files.WriteInt(R, hardFault);
+    Files.WriteInt(R, memManage);
+    Files.WriteInt(R, busFault);
+    Files.WriteInt(R, usageFault);
+    Files.WriteInt(R, 0);       (* Reserved ARM Vector slot *)
+    
+    (* Offset 20H *) Files.WriteInt(R, imageLength);
+    (* Offset 24H *) Files.WriteInt(R, imageType);
+    (* Offset 28H *) Files.WriteInt(R, extHeaderOffset);
+    
+    (* Offset 2CH to 33H: Vector Table Entries Part 2 (8 bytes = 2 words) *)
+    Files.WriteInt(R, svCall);
+    Files.WriteInt(R, debugMonitor);
+    
+    (* Offset 34H *) Files.WriteInt(R, executionAddress);
+
+    (* 3. Append the remaining core ARM vectors to complete the 0x40 boundary *)
+    (* Offset 38H *) Files.WriteInt(R, 00000010DH); (* PendSV Vector *)
+    (* Offset 3CH *) Files.WriteInt(R, 00000010DH); (* SysTick Vector *)
+
+    (* 4. Optional: Pad from 0x40 to 0x100 with default peripheral vector stubs *)
+    (* This fills the gap with 48 empty/stubbed pointers so code lands precisely at 0x100 *)
+    FOR i := 0 TO 47 DO
+      Files.WriteInt(R, 00000010DH) 
+    END;
+
+  END NXP_Header;
 
 BEGIN
   arg_num := 1;
