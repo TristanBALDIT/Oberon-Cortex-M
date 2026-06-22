@@ -911,11 +911,11 @@ MODULE ORP; (*N. Wirth 1.7.97 / 8.3.2020  Oberon compiler for RISC in Oberon-07 
       ProcedureType(type, parblksize);  (*formal parameter list*)
       Check(ORS.semicolon, "no ;"); locblksize := parblksize; 
       Declarations(locblksize);
-      proc.val := ORG.Here() * 4; proc.type.dsc := ORB.topScope.next;
+      proc.val := ORG.Here() * 2; proc.type.dsc := ORB.topScope.next;
       IF sym = ORS.procedure THEN
         L := 0; ORG.FJump(L);
         REPEAT ProcedureDecl; Check(ORS.semicolon, "no ;") UNTIL sym # ORS.procedure;
-        ORG.FixOne(L); proc.val := ORG.Here() * 4; proc.type.dsc := ORB.topScope.next
+        ORG.FixOne(L); proc.val := ORG.Here() * 2; proc.type.dsc := ORB.topScope.next
       END ;
       ORG.Enter(parblksize, locblksize, int);
       IF sym = ORS.begin THEN ORS.Get(sym); StatSequence END ;
