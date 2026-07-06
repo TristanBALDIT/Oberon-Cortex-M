@@ -3,6 +3,8 @@
 *.elf
 *.smb
 *.arm
+*.bin
+*.s19
 
 # Ignore build directory
 .obnc/
