@@ -49,7 +49,8 @@ MODULE ORL;
       importing*, imported*: ModuleName;
       appendix : ARRAY 5 OF CHAR;
       bin : ARRAY 1000000 OF BYTE;
-
+      nxpheader : INTEGER;
+      imageLength: INTEGER;
 
   PROCEDURE err(str : ARRAY OF CHAR);  (* Helper function for DEBUG purpose*)
   BEGIN
@@ -138,6 +139,69 @@ MODULE ORL;
     appendix[j] := 0X;
     RETURN appendix = ".arm"
   END ParseFileName;
+
+  PROCEDURE NXP_Header(VAR R: Files.Rider);
+  VAR 
+    i: INTEGER;
+    sp, pc: INTEGER;
+    nmi, hardFault, memManage, busFault, usageFault: INTEGER;
+    svCall, debugMonitor, PendSV, SysTick: INTEGER;
+    imageType, extHeaderOffset, executionAddress: INTEGER;
+  BEGIN 
+    (* 1. Set up standard addresses based on your 0x100 code placement *)
+    sp := 020040000H;           (* Top of SRAM for MCXN947 *)
+    pc := 0000002A1H;           (* Code entry point at RAM Start + offset for nxp header +  1 for Thumb bit *)
+    
+    (* System exception stubs (Assuming they sit sequentially right after entry code) *)
+    nmi        := 00000201H;   (* 0x000 + 1 *)
+    hardFault  := 00000201H;   (* 0x000 + 1 *)
+    memManage  := 00000201H;   (* 0x000 + 1 *)
+    busFault   := 00000201H;   (* Map remaining faults to a generic loop stub *)
+    usageFault := 00000201H;
+    
+    svCall       := 000000201H;
+    debugMonitor := 000000201H;
+    PendSV       := 000000201H;
+    SysTick      := 000000201H;
+
+    (* Metadata Constants *)
+    imageType        := 0;          (* 0 = Plain Image *)
+    extHeaderOffset  := 0;          (* No extended or CRC header *)
+    executionAddress := 0;          (* XIP *)     
+
+    (* 2. Serialize the exact NXP Container Table layout (36 bytes total) *)
+    (* Offset 00H *) Files.WriteInt(R, sp);
+    (* Offset 04H *) Files.WriteInt(R, pc);
+    
+    (* Offset 08H to 1FH: Vector Table Entries Part 1 (24 bytes = 6 words) *)
+    Files.WriteInt(R, nmi);
+    Files.WriteInt(R, hardFault);
+    Files.WriteInt(R, memManage);
+    Files.WriteInt(R, busFault);
+    Files.WriteInt(R, usageFault);
+    Files.WriteInt(R, 0);       (* Reserved ARM Vector slot *)
+    
+    (* Offset 20H *) Files.WriteInt(R, 0);  (*no image lenght for XIP*)
+    (* Offset 24H *) Files.WriteInt(R, imageType);
+    (* Offset 28H *) Files.WriteInt(R, extHeaderOffset);
+    
+    (* Offset 2CH to 33H: Vector Table Entries Part 2 (8 bytes = 2 words) *)
+    Files.WriteInt(R, svCall);
+    Files.WriteInt(R, debugMonitor);
+    
+    (* Offset 34H *) Files.WriteInt(R, executionAddress);
+
+    (* 3. Append the remaining core ARM vectors to complete the 0x40 boundary *)
+    (* Offset 38H *) Files.WriteInt(R, PendSV); (* PendSV Vector *)
+    (* Offset 3CH *) Files.WriteInt(R, SysTick); (* SysTick Vector *)
+
+    (* 4. Optional: Pad from 0x40 to 0x100 with default peripheral vector stubs *)
+    (* This fills the gap with 48 empty/stubbed pointers so code lands precisely at 0x100 *)
+    FOR i := 0 TO 151 DO
+      Files.WriteInt(R, 000000001H) 
+    END;
+
+  END NXP_Header;
 
   PROCEDURE LinkOne(name: ARRAY OF CHAR; VAR newmod: Module; VAR R1: Files.Rider);
     VAR mod, impmod: Module;
@@ -334,7 +398,8 @@ MODULE ORL;
         WHILE nofimps > 0 DO DEC(nofimps); DEC(import[nofimps].refcnt) END
       END;
     END;
-    newmod := mod
+    newmod := mod;
+    imageLength := Files.Pos(R1);
   END LinkOne;
 
   PROCEDURE Link(VAR filename: ARRAY OF CHAR);
@@ -347,13 +412,15 @@ MODULE ORL;
 	BEGIN res := -1; root := NIL; Start := AllocPtrInit; AllocPtr := Start + ModAdr; Reused := 0;
     IF ParseFileName(filename, name2) THEN
       MakeFileName(name, name2, ".bin");
-      F := Files.New(name); Files.Set(R, F, 0);
+      F := Files.New(name); Files.Set(R, F, nxpheader);
       i := Start;
       WHILE i < AllocPtr DO PutInt(i, 0); Files.WriteInt(R, 0); INC(i, 4) END; (*place holders*)
       LinkOne(name2, M, R);  (*link process*)
       IF res = noerr THEN M := root;
         WHILE M # NIL DO 
-          Files.Set(R,F, M.adr - Start + pbase + M.pvr + 48); Files.WriteInt(R, M.refcnt); (*insert refcnt*)
+          Err.String(M.name); Err.Ln();
+          Err.Int(M.adr - Start + M.pvr + 48 + nxpheader, 10); Err.Ln();
+          Files.Set(R,F, M.adr - Start + M.pvr + 48 + nxpheader); Files.WriteInt(R, M.refcnt); (*insert correct refcnt*)
           M := M.next
         END; 
         x := GetInt2(Start); (*adress of init body of topmodule relative to start*)
@@ -370,6 +437,7 @@ MODULE ORL;
         PutInt(Start + StackAdr, 100000H); (*limit of module area, overwritten by the bootloader*)
         PutInt(Start + FPrintAdr, FPrint); (*fingerprint*)
         Files.Set(R, F, 0);  i := Start;
+        IF nxpheader > 0 THEN NXP_Header(R) END;
         WHILE i < Start + ModAdr DO x := GetInt2(i); Files.WriteInt(R, x); INC(i, 4) END; (*insert boot parameters*)
         Files.Register(F)
       ELSE
@@ -383,71 +451,17 @@ MODULE ORL;
     ELSE Err.String("Link error : invalid source file name"); Err.Ln() END
 	END Link;
 
-
-  PROCEDURE NXP_Header(VAR R: Files.Rider; imageLength: INTEGER);
-  VAR 
-    i: INTEGER;
-    sp, pc: INTEGER;
-    nmi, hardFault, memManage, busFault, usageFault: INTEGER;
-    svCall, debugMonitor: INTEGER;
-    imageType, extHeaderOffset, executionAddress: INTEGER;
-  BEGIN 
-    (* 1. Set up standard addresses based on your 0x100 code placement *)
-    sp := 020040000H;           (* Top of SRAM for MCXN947 *)
-    pc := 000000101H;           (* Code entry point at 0x100 + 1 for Thumb bit *)
-    
-    (* System exception stubs (Assuming they sit sequentially right after entry code) *)
-    nmi        := 000000105H;   (* 0x104 + 1 *)
-    hardFault  := 000000109H;   (* 0x108 + 1 *)
-    memManage  := 00000010DH;   (* 0x10C + 1 *)
-    busFault   := 00000010DH;   (* Map remaining faults to a generic loop stub *)
-    usageFault := 00000010DH;
-    
-    svCall       := 00000010DH;
-    debugMonitor := 00000010DH;
-
-    (* Metadata Constants *)
-    imageType        := 0;      (* 0 = Plain Execute-In-Place (XIP) *)
-    extHeaderOffset  := 0;      (* No extended or CRC header *)
-    executionAddress := 0;      (* Must be 0 for XIP images *)
-
-    (* 2. Serialize the exact NXP Container Table layout (36 bytes total) *)
-    (* Offset 00H *) Files.WriteInt(R, sp);
-    (* Offset 04H *) Files.WriteInt(R, pc);
-    
-    (* Offset 08H to 1FH: Vector Table Entries Part 1 (24 bytes = 6 words) *)
-    Files.WriteInt(R, nmi);
-    Files.WriteInt(R, hardFault);
-    Files.WriteInt(R, memManage);
-    Files.WriteInt(R, busFault);
-    Files.WriteInt(R, usageFault);
-    Files.WriteInt(R, 0);       (* Reserved ARM Vector slot *)
-    
-    (* Offset 20H *) Files.WriteInt(R, imageLength);
-    (* Offset 24H *) Files.WriteInt(R, imageType);
-    (* Offset 28H *) Files.WriteInt(R, extHeaderOffset);
-    
-    (* Offset 2CH to 33H: Vector Table Entries Part 2 (8 bytes = 2 words) *)
-    Files.WriteInt(R, svCall);
-    Files.WriteInt(R, debugMonitor);
-    
-    (* Offset 34H *) Files.WriteInt(R, executionAddress);
-
-    (* 3. Append the remaining core ARM vectors to complete the 0x40 boundary *)
-    (* Offset 38H *) Files.WriteInt(R, 00000010DH); (* PendSV Vector *)
-    (* Offset 3CH *) Files.WriteInt(R, 00000010DH); (* SysTick Vector *)
-
-    (* 4. Optional: Pad from 0x40 to 0x100 with default peripheral vector stubs *)
-    (* This fills the gap with 48 empty/stubbed pointers so code lands precisely at 0x100 *)
-    FOR i := 0 TO 47 DO
-      Files.WriteInt(R, 00000010DH) 
-    END;
-
-  END NXP_Header;
-
 BEGIN
   arg_num := 1;
+  nxpheader := 0; (* Initialize the header variable *)
   LibC.getarg(arg_num, arg);
+
+  (* Check if the first argument is the -h flag *)
+  IF arg = "-h" THEN
+    nxpheader := 02A0H;
+    INC(arg_num);
+    LibC.getarg(arg_num, arg); (* Get the next argument for the filename *)
+  END;
 
   IF arg # ""
   THEN Link(arg)
