@@ -110,6 +110,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     i32_STRB_imm8_w = 0F8000900H;  (* STRB Rt, [Rn, #imm8] *)
     i32_STR_imm8_i = 0F8400C00H;  (* STR Rt, [Rn, #imm8] *)
     i32_STR_imm8_w = 0F8400900H;  (* STR Rt, [Rn, #imm8] *)
+    i32_STR_imm8_iw = 0F8400D00H;  (* STR Rt, [Rn, #imm8] *)
 
     i32_LDMIA_w = 0E8B00000H;  (* LDMIA Rn!, {Rlist} *)
     i32_STMDB_w = 0E9200000H;  (* STMDB Rn!, {Rlist} *)
@@ -425,7 +426,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   PROCEDURE PutLS(op, rt, rn, off: INTEGER);
     VAR off_high, i, j: INTEGER;
   BEGIN
-    IF off < 0 THEN off := -off;
+    IF off <= 0 THEN off := -off;
     ELSE 
       INC(op, 200H);
       IF off >= C16 THEN ORS.Raise("PutLS offset too big") END;
@@ -650,7 +651,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
         x.r := RH; incR
       ELSIF x.mode = RegI THEN PutLS(op, x.r, x.r, x.a)
       ELSIF x.mode = Cond THEN 
-        PutB32(i32_B_cond_imm21, negated(x.r), 4 - dPC); 
+        PutB32(i32_B_cond_imm21, negated(x.r), 3 - dPC); 
         FixLink(x.b); PutI8(i16_MOV_imm8, RH, 1); PutB16(i16_B_imm11, 0, 2 - dPC);
         FixLink(x.a); PutI8(i16_MOV_imm8, RH, 0); x.r := RH; incR
       END;
@@ -1338,14 +1339,14 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   PROCEDURE SaveRegs(r: INTEGER);  (* R[0 .. r-1]*)
   BEGIN (*r > 0*) 
     DEC(frame, 4*r);
-    PutLSM(i32_STMDB_w, SP, {0..r-1});
+    PutLSM(i32_STMDB_w, SP, {0..r-1});    
     (* PutLS(i32_STR_imm8_w, RA, SP, 4*r); *)
   END SaveRegs;
 
   PROCEDURE RestoreRegs(r: INTEGER); (*R[0 .. r-1]*)
   BEGIN (*r > 0*) 
     DEC(frame, 4*r);
-    PutLSM(i32_LDMIA_w, SP, {0..r-1});
+    PutLSM(i32_LDMIA_w, SP, {0..r-1});   
     (* PutLS(i32_LDR_imm8_w, RA, SP, 4*r); *)
   END RestoreRegs;
 
@@ -1359,7 +1360,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   PROCEDURE Call*(VAR x: Item; r: INTEGER);
   BEGIN (*x.type.form = ORB.Proc*)
     IF x.mode = ORB.Const THEN
-      IF x.r >= 0 THEN PutB32_2(i32_BL_imm25, (x.a DIV 4)-pc-dPC)
+      IF x.r >= 0 THEN PutB32_2(i32_BL_imm25, (x.a DIV 2)-pc-dPC)
       ELSE (*imported*) fixcode(x.r, x.a);
       END
     ELSE (*installed procedure*)
@@ -1387,7 +1388,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
         j := LSL(off_high, 7-i) MOD C7 + (24 + 7 - i)* C7;
         PutI12(i32_SUB_exp12, SP, SP, j) 
     END; (*TODO : verify the instruction*)
-    PutLS(i32_STR_imm8_w, RA, SP, -(locblksize MOD C8));      (* store RA in the stack, could be optimized *)
+    PutLS(i32_STR_imm8_iw, RA, SP, -(locblksize MOD C8));      (* store RA in the stack, could be optimized *)
     IF parblksize > 4 THEN 
       PutI12(i32_ADD_exp12, SP, SP, 4); (*avance de 4 pour simuler STMIB*)
       PutLSM(i32_STMIA_i, SP, {0..(parblksize DIV 4 -2)});
@@ -1662,7 +1663,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE Header*;
   BEGIN entry := pc*2;
-    PutLS(i32_STR_imm8_w, RA, SP, -4);
+    PutLS(i32_STR_imm8_iw, RA, SP, -4);
   END Header;
 
   PROCEDURE NofPtrs(ftyp: SET; typ: ORB.Type): INTEGER;
