@@ -978,6 +978,7 @@ MODULE ORP; (*N. Wirth 1.7.97 / 8.3.2020  Oberon compiler for RISC in Oberon-07 
       WHILE sym = ORS.procedure DO ProcedureDecl; Check(ORS.semicolon, "no ;") END ;
       ORG.Header;
       IF sym = ORS.begin THEN ORS.Get(sym); StatSequence END ;
+        ORG.Exit;
       Check(ORS.end, "no END");
       IF sym = ORS.ident THEN
         IF ORS.id # modid THEN ORS.Raise("no match") END ;

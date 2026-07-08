@@ -14,6 +14,7 @@ MODULE ORL;
         TrapAdr = 4;
         DestAdr = 8; MemAdr = 12; AllocAdr = 16; RootAdr = 20; StackAdr = 24; FPrintAdr = 28;
         ModAdr = 32;
+        MaxModules = 64;
 
         C3 = 8H; C4 = 10H; C6 = 40H; C8 = 100H; C10 = 400H; C11 =800H;
         C12 = 1000H; C13 = 2000H; C14 = 4000H; C15 = 4000H;
@@ -51,6 +52,7 @@ MODULE ORL;
       bin : ARRAY 1000000 OF BYTE;
       nxpheader : INTEGER;
       imageLength: INTEGER;
+      bodyAdrList: ARRAY 100 OF INTEGER;
 
   PROCEDURE err(str : ARRAY OF CHAR);  (* Helper function for DEBUG purpose*)
   BEGIN
@@ -358,6 +360,7 @@ MODULE ORL;
           PutInt(adr, inst); adr := adr - disp * 4
         END;   
         PutInt(Start, body - pbase); (*module initialization body*)
+        bodyAdrList[mod.num - 1] := body - pbase; (*remember body address for call*)
         (*write module to boot file*)
         i := mod.adr; n := MnLenght;
         WHILE n > 0 DO Files.WriteChar(R1, mod.name[MnLenght-n]); INC(i); DEC(n) END; (*name*)
@@ -409,7 +412,7 @@ MODULE ORL;
       R: Files.Rider;
       M: Module;
       name, name2: ModuleName;
-	BEGIN res := -1; root := NIL; Start := AllocPtrInit; AllocPtr := Start + ModAdr; Reused := 0;
+	BEGIN res := -1; root := NIL; Start := AllocPtrInit; AllocPtr := Start + ModAdr + MaxModules * 4; Reused := 0;
     IF ParseFileName(filename, name2) THEN
       MakeFileName(name, name2, ".bin");
       F := Files.New(name); Files.Set(R, F, nxpheader);
@@ -423,22 +426,25 @@ MODULE ORL;
           Files.Set(R,F, M.adr - Start + M.pvr + 48 + nxpheader); Files.WriteInt(R, M.refcnt); (*insert correct refcnt*)
           M := M.next
         END; 
-        x := GetInt2(Start); (*adress of init body of topmodule relative to start*)
-        x := (x DIV 2 - dPC) MOD C24;
-        s := x DIV C23 MOD 2;
-        j1 := ABS((1 - x DIV C22 MOD 2) - s);
-        j2 := ABS((1 - x DIV C21 MOD 2) - s);
-        PutInt(Start, ROR(i32_B + s * C26 + (x DIV C11) MOD C10 * C16 + j1 * C13 + j2 * C11 + x MOD C11, 16)); (*jump to start of program*)
-        PutInt(Start + TrapAdr, 0); (*trap handler, overwritten by the inner core*)
-        PutInt(Start + DestAdr, 0); (*destination address of the prelinked, executable binary*)
-        PutInt(Start + MemAdr, 1000000H); (*limit of mem, overwritten by bootloader*)
-        PutInt(Start + AllocAdr, AllocPtr + Reused - Start + pbase); (*address of the end of the module space loaded*)
-        PutInt(Start + RootAdr, root.adr - Start + pbase + root.pvr); (*current root of the loaded modules*)
-        PutInt(Start + StackAdr, 100000H); (*limit of module area, overwritten by the bootloader*)
-        PutInt(Start + FPrintAdr, FPrint); (*fingerprint*)
+        FOR i := 0 TO root.num - 1 DO
+          Err.Int(i, 10); Err.String(" : "); Err.Int(bodyAdrList[i], 10); Err.Ln();
+          x := bodyAdrList[i];   
+          x := (x DIV 2 - dPC - i*2) MOD C24;
+          s := x DIV C23 MOD 2;
+          j1 := ABS((1 - x DIV C22 MOD 2) - s);
+          j2 := ABS((1 - x DIV C21 MOD 2) - s);
+          PutInt(Start + i * 4, ROR(i32_B + s * C26 + (x DIV C11) MOD C10 * C16 + j1 * C13 + j2 * C11 + x MOD C11, 16)); (*jump to start of program*)
+        END;
+        PutInt(Start + TrapAdr  + (root.num - 1) * 4, 0); (*trap handler, overwritten by the inner core*)
+        PutInt(Start + DestAdr  + (root.num - 1) * 4, 0); (*destination address of the prelinked, executable binary*)
+        PutInt(Start + MemAdr   + (root.num - 1) * 4, 1000000H); (*limit of mem, overwritten by bootloader*)
+        PutInt(Start + AllocAdr + (root.num - 1) * 4, AllocPtr + Reused - Start + pbase); (*address of the end of the module space loaded*)
+        PutInt(Start + RootAdr  + (root.num - 1) * 4, root.adr - Start + pbase + root.pvr); (*current root of the loaded modules*)
+        PutInt(Start + StackAdr + (root.num - 1) * 4, 100000H); (*limit of module area, overwritten by the bootloader*)
+        PutInt(Start + FPrintAdr + (root.num - 1) * 4, FPrint); (*fingerprint*)
         Files.Set(R, F, 0);  i := Start;
         IF nxpheader > 0 THEN NXP_Header(R) END;
-        WHILE i < Start + ModAdr DO x := GetInt2(i); Files.WriteInt(R, x); INC(i, 4) END; (*insert boot parameters*)
+        WHILE i < Start + ModAdr + (root.num - 1) * 4 DO x := GetInt2(i); Files.WriteInt(R, x); INC(i, 4) END; (*insert boot parameters*)
         Files.Register(F)
       ELSE
         IF res = nofile THEN Err.String("Link error : module not found"); Err.Ln()

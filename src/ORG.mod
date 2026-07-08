@@ -1666,6 +1666,11 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
     PutLS(i32_STR_imm8_iw, RA, SP, -4);
   END Header;
 
+  PROCEDURE Exit*;
+  BEGIN
+    PutLS(i32_LDR_imm8_w, PC, SP, 4);
+  END Exit; 
+
   PROCEDURE NofPtrs(ftyp: SET; typ: ORB.Type): INTEGER;
     VAR fld: ORB.Object; n: INTEGER;
   BEGIN
@@ -1711,7 +1716,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
       END ;
       obj := obj.next
     END ;
-    size := tdx + tdw*4 + comsize + (pc + nofimps + nofent + nofptrs + 2)*4;  (*varsize includes type descriptors*)    
+    size := tdx + tdw*4 + comsize + pc * 2 + (nofimps + nofent + nofptrs + 2)*4;  (*varsize includes type descriptors*)    
 
     ORB.MakeFileName(name, modid, appendix); (*write code file*)
     F := Files.New(name); Files.Set(R, F, 0); Files.WriteString(R, modid); Files.WriteInt(R, key); Files.WriteChar(R, version);
