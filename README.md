@@ -7,8 +7,10 @@ A lightweight, bare-metal **Oberon compiler** currently targeting the **ARM Cort
 
 > **Note:** The compiler toolchain and custom linker have currently been tested exclusively in a cross-compilation environment (building on a host machine for Cortex-M33 execution). Embedded versions of librairies modules used by the the compiler and linker are not yet developped.
 
-Based on Niklaus Wirth's original Oberon-07 compiler from [Project Oberon](https://www.projectoberon.com/) and insights from [The Embedded Extended Oberon Operating System](https://github.com/m-spencer/extended-oberon), this compiler features a custom code generation module (`ORG`) specifically designed for emitting native **ARM Thumb-2** instructions.
+Based on Niklaus Wirth's original Oberon-07 compiler from [Project Oberon](https://www.projectoberon.com/) and insights from [The Embedded Extended Oberon Operating System](https://github.com/m-spencer/extended-oberon), this compiler features:
 
+* A custom **code generation module (`ORG`)** engineered to emit native **ARM Thumb-2** instructions.
+* A dedicated **linker (`ORL`)** designed to produce complete executable binaries and headers ready to run on the **NXP FRDM-MCXN947** board.
 ---
 
 ## Key Features
@@ -32,3 +34,24 @@ Oberon-Cortex-M/
 │   ├── 01/ .. 17/          # Progressive test cases adapted from Niklaus Wirth's specs
 │   └── others              # Others test files for the compiler/linker
 └── README.md
+```
+---
+
+## Compiler/Linker Architecture
+
+
+### Compiler Key Modules
+
+| Module | Name | Function & Responsibility |
+| :--- | :--- | :--- |
+| **`ORS.Mod`** | **Scanner** | Reads source characters, strips comments/whitespace, and yields a stream of lexical tokens. |
+| **`ORB.Mod`** | **Symbol Table** | Manages scope hierarchy, type declarations, and symbol definitions, generating `.smb` symbol files during compilation. |
+| **`ORG.Mod`** | **Code Generator** | Emits native **ARM Thumb-2** instructions directly into a code buffer during parsing and writes the compiled machine code into an `.arm` binary file. |
+| **`ORP.Mod`** | **Parser** | The core driver of the compiler. Performs top-down recursive descent parsing, enforces Oberon-07 syntax, and coordinates code synthesis. |
+| **`ORC.Mod`** | **Compiler Driver** | The top-level module that parses command-line arguments and invokes the compiler pipeline (`ORP`). |
+
+
+### Linker Module
+
+> **`ORL.Mod` (Linker)**  
+> Operates independently after the compilation phase. It resolves module dependencies, relocates symbols, formats the target vector table and memory headers, and links one or more `.arm` files into a final flashable executable binary (`.bin`). The `-h` CLI flag add to the binary the necessary NXP header for the **NXP FRDM-MCXN947** target board.
