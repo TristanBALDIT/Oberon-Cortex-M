@@ -412,23 +412,23 @@ MODULE ORL;
       R: Files.Rider;
       M: Module;
       name, name2: ModuleName;
-	BEGIN res := -1; root := NIL; Start := AllocPtrInit; AllocPtr := Start + ModAdr + MaxModules * 4; Reused := 0;
+	BEGIN res := -1; root := NIL; Start := AllocPtrInit; AllocPtr := Start + ModAdr + MaxModules * 4 + nxpheader; Reused := 0;
     IF ParseFileName(filename, name2) THEN
       MakeFileName(name, name2, ".bin");
-      F := Files.New(name); Files.Set(R, F, nxpheader);
+      F := Files.New(name); Files.Set(R, F, 0);
       i := Start;
       WHILE i < AllocPtr DO PutInt(i, 0); Files.WriteInt(R, 0); INC(i, 4) END; (*place holders*)
       LinkOne(name2, M, R);  (*link process*)
       IF res = noerr THEN M := root;
         WHILE M # NIL DO 
-          Err.String(M.name); Err.Ln();
-          Err.Int(M.adr - Start + M.pvr + 48 + nxpheader, 10); Err.Ln();
-          Files.Set(R,F, M.adr - Start + M.pvr + 48 + nxpheader); Files.WriteInt(R, M.refcnt); (*insert correct refcnt*)
+          (* Err.String(M.name); Err.Ln();
+          Err.Int(M.adr - Start + M.pvr + 48, 10); Err.Ln(); *)
+          Files.Set(R,F, M.adr - Start + M.pvr + 48); Files.WriteInt(R, M.refcnt); (*insert correct refcnt*)
           M := M.next
         END; 
         FOR i := 0 TO root.num - 1 DO
-          Err.Int(i, 10); Err.String(" : "); Err.Int(bodyAdrList[i], 10); Err.Ln();
-          x := bodyAdrList[i];   
+          (* Err.Int(i, 10); Err.String(" : "); Err.Int(bodyAdrList[i], 10); Err.Ln(); *)
+          x := bodyAdrList[i] - nxpheader;   
           x := (x DIV 2 - dPC - i*2) MOD C24;
           s := x DIV C23 MOD 2;
           j1 := ABS((1 - x DIV C22 MOD 2) - s);
