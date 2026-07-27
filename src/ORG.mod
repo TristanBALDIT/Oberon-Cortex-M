@@ -651,7 +651,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
         x.r := RH; incR
       ELSIF x.mode = RegI THEN PutLS(op, x.r, x.r, x.a)
       ELSIF x.mode = Cond THEN 
-        PutB32(i32_B_cond_imm21, negated(x.r), 3 - dPC); 
+        PutB32(i32_B_cond_imm21, negated(x.r), 4 - dPC); 
         FixLink(x.b); PutI8(i16_MOV_imm8, RH, 1); PutB16(i16_B_imm11, 0, 2 - dPC);
         FixLink(x.a); PutI8(i16_MOV_imm8, RH, 0); x.r := RH; incR
       END;
@@ -727,7 +727,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
   PROCEDURE loadStringAdr(VAR x: Item);
   BEGIN
     IF x.r >= 0 THEN  fixvar(0, varx + x.a); 
-    ELSE (*imported*) fixvar(- x.r, x.a);
+    ELSE (*imported*) fixvar(x.r, x.a);
     END;
     PutI16(i32_MOVT, RH, 0);
     x.mode := Reg; x.r := RH; incR
@@ -745,7 +745,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
 
   PROCEDURE MakeStringItem*(VAR x: Item; len: INTEGER); (*copies string from ORS-buffer to ORG-string array*)
     VAR i: INTEGER;
-  BEGIN x.mode := ORB.Const; x.type := ORB.strType; x.a := strx; x.b := len; i := 0;
+  BEGIN x.mode := ORB.Const; x.type := ORB.strType; x.a := strx; x.b := len; i := 0; x.r := 0;
     IF strx + len + 4 < maxStrx THEN
       WHILE len > 0 DO str[strx] := ORS.str[i]; INC(strx); INC(i); DEC(len) END ;
       WHILE strx MOD 4 # 0 DO str[strx] := 0X; INC(strx) END
@@ -1017,7 +1017,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
           PutR32_2(i32_SUB_reg, RH, x.r, y.r + 32 + LSL(3,6) + LSL(7,12)); 
           PutR32_2(i32_SDIV_reg, RH, RH, y.r);
           IF ~yc & check THEN PutI8(i16_CMP_imm8, y.r, 0); Trap(LE, TrapDivZero) END;
-          PutR32_2(i32_ADD_reg, RH-2, x.r, y.r + 32 + LSL(3,6) + LSL(7,12)); 
+          PutR32_2(i32_ADD_reg, RH-2, RH, x.r + 32 + LSL(3,6) + LSL(7,12)); 
           DEC(RH); x.r := RH-1
         END;
       END
@@ -1034,7 +1034,7 @@ MODULE ORG; (* N.Wirth, 16.4.2016 / 4.4.2017 / 31.5.2019  Oberon compiler; code 
           PutR32_2(i32_SUB_reg, RH, x.r, y.r + 32 + LSL(3,6) + LSL(7,12)); 
           PutR32_2(i32_SDIV_reg, RH, RH, y.r);
           IF ~yc & check THEN PutI8(i16_CMP_imm8, y.r, 0); Trap(LE, TrapDivZero) END;
-          PutR32_2(i32_ADD_reg, RH-1, RH, y.r + 32 + LSL(3,6) + LSL(7,12));
+          PutR32_2(i32_ADD_reg, RH, RH, x.r + 32 + LSL(3,6) + LSL(7,12));
           PutMUL(i32_MLS_reg, RH-2, RH, y.r, x.r); 
           DEC(RH); x.r := RH-1
         END
