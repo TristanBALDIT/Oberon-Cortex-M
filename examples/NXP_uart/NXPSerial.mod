@@ -109,7 +109,10 @@ MODULE NXPSerial;
  
 BEGIN
     Init;
-    Char("T"); 
-    Char("I");
+    Char("N"); 
+    Char("X");
+    Char("P");
+    String(" UART OK ");
+    Int(1234567890);
     WHILE TRUE DO END;
 END NXPSerial.
